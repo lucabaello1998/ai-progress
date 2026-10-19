@@ -1,0 +1,9 @@
+{
+  "statusPaths": ["status.json"],
+  "sections": { "tasks": true, "claude": true, "codex": true, "opencode": true },
+  "showHelp": false,
+  "opencodeCliPath": null,
+  "opencodeRefreshSeconds": 60,
+  "codexRefreshSeconds": 60,
+  "customProviders": []
+}

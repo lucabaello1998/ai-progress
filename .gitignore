@@ -2,3 +2,5 @@
 status.json
 # Config local (rutas y preferencias de cada máquina).
 config.json
+# Logs del modo captura (AI_PROGRESS_CAPTURE).
+*.log

@@ -6,16 +6,29 @@ Widget flotante para Windows que muestra, siempre visible arriba a la derecha:
    mantienen los agentes (Claude Code, OpenCode o cualquier script propio).
 2. **Uso de Claude** — ventana de 5 h y límite semanal de 7 días, leído del cache de la CLI
    (`~/.claude.json`), con indicador de qué tan viejo es el dato.
-3. **Uso de OpenCode** — sesiones, prompts, pasos, tokens y costo del día, vía
-   `opencode stats --days 0 --json` (se refresca cada 60 s para no spamear el CLI).
+3. **Uso de Codex** — sesiones y tokens del día desde los logs locales
+   (`~/.codex/sessions/**/rollout-*.jsonl`); si el log trae límites, también muestra las barras
+   de 5 h / semanal.
+4. **Uso de OpenCode** — sesiones, prompts, pasos, tokens y costo del día, vía
+   `opencode stats --days 0 --json` (refresco cada 60 s).
+5. **Otros modelos** — proveedores propios definidos en `config.json` (un comando CLI o un
+   archivo JSON con métricas).
+
+El **menú de chips** de arriba prende/apaga cada sección (la elección se guarda en
+`config.json`) y el botón **?** muestra la explicación de cómo funciona, dentro del widget.
 
 ![screenshot](docs/screenshot.png)
+
+Con la ayuda abierta (botón **?**):
+
+![screenshot con la ayuda abierta](docs/screenshot-ayuda.png)
 
 ## Requisitos
 
 - Windows + **PowerShell 7** (`pwsh`) — usa `ConvertFrom-Json -AsHashtable`.
 - Opcional: CLI de OpenCode (`opencode` en el PATH, `%USERPROFILE%\bin\opencode.exe`, o el que
-  trae OpenCode Desktop) para la sección de uso de OpenCode.
+  trae OpenCode Desktop) para la sección de OpenCode. La de Codex funciona con solo tener sus
+  logs locales.
 
 ## Uso
 
@@ -24,7 +37,7 @@ Widget flotante para Windows que muestra, siempre visible arriba a la derecha:
 
 Es un monitor: cerrar la ventana no cancela ninguna tarea.
 
-## `status.json` (tareas)
+## Tareas: `status.json`
 
 El widget lee uno o varios `status.json` (por default el que está al lado del script). Formas de
 progreso soportadas por tarea:
@@ -58,22 +71,59 @@ lanzar tareas largas; por ejemplo:
 }
 ```
 
-## Configuración opcional (`config.json`)
+## Configuración (`config.json`)
+
+Copiá [`config.example.json`](config.example.json) a `config.json` y editá lo que necesites.
+Todo es opcional (el widget arranca con defaults sensatos). El archivo está gitignored, y el
+propio widget lo reescribe cuando usás el menú de chips o el botón **?**.
 
 ```json
 {
-  "statusPaths": ["status.json", "C:\\ruta\\extra\\status.json"],
+  "statusPaths": ["status.json"],
+  "sections": { "tasks": true, "claude": true, "codex": true, "opencode": true },
+  "showHelp": false,
   "opencodeCliPath": null,
-  "opencodeRefreshSeconds": 60
+  "opencodeRefreshSeconds": 60,
+  "codexRefreshSeconds": 60,
+  "customProviders": []
+}
+```
+
+### Proveedores propios (`customProviders`)
+
+Cada proveedor agrega una sección (y su chip en el menú). Dos formas de obtener los datos:
+
+- `command` (+ `args` opcional): se ejecuta y tiene que imprimir **JSON por stdout**.
+- `file`: ruta a un JSON local (se relee en cada refresco).
+
+JSON esperado — todos los campos son opcionales:
+
+```json
+{
+  "sessions": 3,
+  "prompts": 42,
+  "steps": 210,
+  "tokens": { "input": 320000, "output": 18000, "cache": { "read": 1500000, "write": 0 } },
+  "cost": 0.42
+}
+```
+
+Ejemplo de configuración (para cualquier CLI que exponga stats en JSON):
+
+```json
+{
+  "customProviders": [
+    { "id": "gemini", "name": "Gemini", "command": "gemini", "args": ["stats", "--json"] }
+  ]
 }
 ```
 
 ## Notas
 
-- Solo lee archivos locales; no manda nada a ninguna API. El único proceso que ejecuta es el CLI
-  de OpenCode (`stats --json`).
+- Solo lee archivos locales; no manda nada a ninguna API. Los únicos procesos que ejecuta son
+  los CLIs configurados (OpenCode y los `customProviders`).
 - El ETA de workflows es **estimado**: usa la duración real de los agentes ya terminados, no el
   tiempo total transcurrido (una pausa larga no lo infla).
 - El % de Claude es un cache de la CLI: puede quedar atrás de lo que muestra el chat (se indica la
-  edad del dato).
+  edad del dato). Codex se recalcula cada 60 s desde los logs; si no hubo sesiones hoy, lo dice.
 - Basado en el widget anterior para Claude Code (`claude-progress`), generalizado a IA en general.

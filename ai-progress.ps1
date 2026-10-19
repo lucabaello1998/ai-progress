@@ -1,4 +1,4 @@
-# ai-progress — Widget flotante de progreso para agentes de IA.
+# ai-progress — Widget flotante de progreso para agentes de IA (Claude, Codex, OpenCode y más).
 #
 # Que muestra (siempre visible, arriba a la derecha):
 #   1) TAREAS: lee un status.json (la ruta default es la de esta carpeta) que los agentes
@@ -12,14 +12,32 @@
 #        Si no hay datos de avance: barra indeterminada + tiempo transcurrido.
 #   2) Uso de CLAUDE: ventana de 5hs + limite semanal de 7 dias, leido de ~/.claude.json
 #      (cachedUsageUtilization) - el mismo dato que la CLI cachea cada vez que habla con la API.
-#   3) Uso de OPENCODE: tokens y costo del dia, corriendo `opencode stats --days 0 --json`
+#   3) Uso de CODEX: sesiones de hoy y tokens del dia desde los logs locales
+#      (~/.codex/sessions/**/rollout-*.jsonl); si el log trae rate_limits, muestra las barras
+#      de 5hs / semanal tambien.
+#   4) Uso de OPENCODE: tokens y costo del dia, corriendo `opencode stats --days 0 --json`
 #      (se refresca cada opencodeRefreshSeconds, default 60, para no spamear el CLI).
+#   5) OTROS: proveedores propios definidos en config.json -> customProviders (un comando CLI
+#      o un archivo JSON que devuelva metrics con forma {sessions, prompts, steps, tokens, cost}).
 #
-# No habla con ninguna API ni manda nada: solo lee archivos locales y corre el CLI de OpenCode.
+# MENU (chips arriba del todo): prende/apaga cada seccion. La eleccion se guarda en config.json
+# (sections). El boton "?" muestra la explicacion de como funciona todo, adentro del widget.
+#
+# No habla con ninguna API ni manda nada: solo lee archivos locales y corre CLIs ya instalados.
 # Cerrar la ventana NO cancela nada - es un monitor.
 #
 # Configuracion opcional en config.json (al lado de este script):
-#   { "statusPaths": ["status.json"], "opencodeCliPath": null, "opencodeRefreshSeconds": 60 }
+#   {
+#     "statusPaths": ["status.json"],
+#     "sections": { "tasks": true, "claude": true, "codex": true, "opencode": true },
+#     "showHelp": false,
+#     "opencodeCliPath": null,
+#     "opencodeRefreshSeconds": 60,
+#     "codexRefreshSeconds": 60,
+#     "customProviders": [
+#       { "id": "gemini", "name": "Gemini", "command": "gemini", "args": ["stats", "--json"] }
+#     ]
+#   }
 #
 # Basado en el widget claude-progress (para Claude Code), generalizado a IA en general.
 
@@ -32,6 +50,10 @@ $config = @{
     statusPaths            = @((Join-Path $scriptDir 'status.json'))
     opencodeCliPath        = $null
     opencodeRefreshSeconds = 60
+    codexRefreshSeconds    = 60
+    sections               = @{ tasks = $true; claude = $true; codex = $true; opencode = $true }
+    showHelp               = $false
+    customProviders        = @()
 }
 $configPath = Join-Path $scriptDir 'config.json'
 if (Test-Path $configPath) {
@@ -45,7 +67,19 @@ if (Test-Path $configPath) {
         }
         if ($cfg['opencodeCliPath']) { $config.opencodeCliPath = [string]$cfg['opencodeCliPath'] }
         if ($cfg['opencodeRefreshSeconds']) { $config.opencodeRefreshSeconds = [int]$cfg['opencodeRefreshSeconds'] }
+        if ($cfg['codexRefreshSeconds']) { $config.codexRefreshSeconds = [int]$cfg['codexRefreshSeconds'] }
+        if ($cfg['sections']) {
+            foreach ($clave in @($cfg['sections'].Keys)) { $config.sections[[string]$clave] = [bool]$cfg['sections'][$clave] }
+        }
+        if ($null -ne $cfg['showHelp']) { $config.showHelp = [bool]$cfg['showHelp'] }
+        if ($cfg['customProviders']) {
+            $config.customProviders = @($cfg['customProviders'] | Where-Object { $_['id'] -and ($_['command'] -or $_['file']) })
+        }
     } catch { }
+}
+foreach ($prov in $config.customProviders) {
+    $cid = 'custom:' + [string]$prov['id']
+    if ($null -eq $config.sections[$cid]) { $config.sections[$cid] = $true }
 }
 
 # ---------- Colores (paleta FletAR, pensada para fondo oscuro semitransparente) ----------
@@ -60,13 +94,20 @@ $colorOk = [System.Windows.Media.Color]::FromRgb(0x22, 0xC5, 0x5E)
 $colorWarning = [System.Windows.Media.Color]::FromRgb(0xF5, 0x9E, 0x0B)
 $colorDanger = [System.Windows.Media.Color]::FromRgb(0xEF, 0x44, 0x44)
 $colorOpenCode = [System.Windows.Media.Color]::FromRgb(0x38, 0xBD, 0xF8)  # cyan para OpenCode
+$colorCodex = [System.Windows.Media.Color]::FromRgb(0x10, 0xA3, 0x7F)     # verde OpenAI para Codex
+$colorCustom = [System.Windows.Media.Color]::FromRgb(0xA7, 0x8B, 0xFA)    # lavanda para proveedores propios
 
-# Ruta del config principal de Claude Code (ahi cachea el uso de cuenta).
+# Rutas y estado interno de cada fuente.
 $claudeConfigPath = Join-Path $env:USERPROFILE '.claude.json'
+$codexSessionsDir = Join-Path $env:USERPROFILE '.codex\sessions'
 $script:ultimoUsoConocido = $null
 $script:ultimaLecturaExitosaEn = $null
 $script:usoOpenCode = $null
 $script:usoOpenCodeLeidoEn = $null
+$script:usoCodex = $null
+$script:usoCodexLeidoEn = $null
+$script:customUso = @{}
+$script:customLeido = @{}
 
 function New-Brush($color) { New-Object System.Windows.Media.SolidColorBrush $color }
 
@@ -96,21 +137,38 @@ function Format-Numero([double]$n) {
     return [string][int]$n
 }
 
+function Format-FechaResetLocal($local) {
+    if ($local.Date -eq (Get-Date).Date) {
+        return "reinicia hoy a las $($local.ToString('HH:mm'))"
+    }
+    return "reinicia el $($local.ToString('dd/MM')) a las $($local.ToString('HH:mm'))"
+}
+
 function Format-Reset($resetsAt) {
-    # Parametro sin tipo a proposito: ConvertFrom-Json ya convierte strings ISO en [datetime]
-    # (hora local); tipar como [string] forzaria una re-conversion dependiente de la cultura.
+    # Parametro sin tipo a proposito: ConvertFrom-Json puede devolver [datetime] ya convertido
+    # (ISO 8601); si viene como string se parsea con cultura invariante.
     if ($null -eq $resetsAt -or $resetsAt -eq '') { return $null }
     try {
         if ($resetsAt -is [datetime]) {
             $local = $resetsAt
             if ($local.Kind -eq [System.DateTimeKind]::Utc) { $local = $local.ToLocalTime() }
+        } elseif ($resetsAt -is [datetimeoffset]) {
+            $local = $resetsAt.LocalDateTime
         } else {
             $local = [datetimeoffset]::Parse([string]$resetsAt, [System.Globalization.CultureInfo]::InvariantCulture).ToLocalTime().DateTime
         }
-        if ($local.Date -eq (Get-Date).Date) {
-            return "reinicia hoy a las $($local.ToString('HH:mm'))"
-        }
-        return "reinicia el $($local.ToString('dd/MM')) a las $($local.ToString('HH:mm'))"
+        return Format-FechaResetLocal $local
+    } catch {
+        return $null
+    }
+}
+
+function Format-ResetUnix($segundos) {
+    # Para rate limits de Codex: resets_at viene en segundos unix.
+    if ($null -eq $segundos) { return $null }
+    try {
+        $local = [System.DateTimeOffset]::FromUnixTimeSeconds([long]$segundos).ToLocalTime().DateTime
+        return Format-FechaResetLocal $local
     } catch {
         return $null
     }
@@ -178,7 +236,36 @@ function New-EncabezadoSeccion([string]$texto, [string]$derecha = $null, $colorD
     return $grid
 }
 
+function New-Texto([string]$texto, [double]$tamano = 11, $color = $null, [bool]$italica = $false, [string]$margen = '0,2,0,2') {
+    $tb = New-Object System.Windows.Controls.TextBlock
+    $tb.Text = $texto
+    $tb.FontSize = $tamano
+    $tb.TextWrapping = 'Wrap'
+    $tb.Margin = $margen
+    if ($color) { $tb.Foreground = New-Brush $color } else { $tb.Foreground = New-Brush $colorTexto }
+    if ($italica) { $tb.FontStyle = 'Italic' }
+    return $tb
+}
+
+function Guardar-Config {
+    # Persiste las preferencias de UI y los proveedores (config.json queda gitignored).
+    try {
+        $obj = @{
+            statusPaths            = @($config.statusPaths)
+            opencodeCliPath        = $config.opencodeCliPath
+            opencodeRefreshSeconds = $config.opencodeRefreshSeconds
+            codexRefreshSeconds    = $config.codexRefreshSeconds
+            sections               = $config.sections
+            showHelp               = [bool]$config.showHelp
+            customProviders        = @($config.customProviders)
+        }
+        $obj | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding UTF8
+    } catch { }
+}
+
 # ================= Ventana =================
+$screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+
 $window = New-Object System.Windows.Window
 $window.Title = "Progreso IA"
 $window.WindowStyle = 'None'
@@ -189,8 +276,6 @@ $window.ShowInTaskbar = $false
 $window.ResizeMode = 'NoResize'
 $window.SizeToContent = 'Height'
 $window.Width = 380
-
-$screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
 $window.Left = $screen.Width - $window.Width - 20
 $window.Top = 20
 
@@ -200,17 +285,27 @@ $borderRaiz.BorderBrush = New-Brush $colorBorde
 $borderRaiz.BorderThickness = 1
 $borderRaiz.CornerRadius = 10
 $borderRaiz.Padding = 14
+
+# ScrollViewer: si hay muchas secciones prendidas (o la ayuda abierta), no se sale de pantalla.
+$scroll = New-Object System.Windows.Controls.ScrollViewer
+$scroll.VerticalScrollBarVisibility = 'Auto'
+$scroll.HorizontalScrollBarVisibility = 'Disabled'
+$scroll.MaxHeight = $screen.Height - 70
+$borderRaiz.Child = $scroll
 $window.Content = $borderRaiz
 
 $panelRaiz = New-Object System.Windows.Controls.StackPanel
-$borderRaiz.Child = $panelRaiz
+$scroll.Content = $panelRaiz
 
-# --- Header (arrastrable + boton de cerrar) ---
+# --- Header (arrastrable + boton de ayuda + boton de cerrar) ---
 $header = New-Object System.Windows.Controls.Grid
 $colTitulo = New-Object System.Windows.Controls.ColumnDefinition
+$colAyuda = New-Object System.Windows.Controls.ColumnDefinition
+$colAyuda.Width = 'Auto'
 $colCerrar = New-Object System.Windows.Controls.ColumnDefinition
 $colCerrar.Width = 'Auto'
 $header.ColumnDefinitions.Add($colTitulo)
+$header.ColumnDefinitions.Add($colAyuda)
 $header.ColumnDefinitions.Add($colCerrar)
 
 $tituloVentana = New-Object System.Windows.Controls.TextBlock
@@ -221,13 +316,32 @@ $tituloVentana.FontSize = 13
 [System.Windows.Controls.Grid]::SetColumn($tituloVentana, 0)
 $header.Children.Add($tituloVentana) | Out-Null
 
+$botonAyuda = New-Object System.Windows.Controls.TextBlock
+$botonAyuda.Text = "?"
+$botonAyuda.FontSize = 13
+$botonAyuda.FontWeight = 'Bold'
+$botonAyuda.Cursor = 'Hand'
+$botonAyuda.Margin = '10,0,0,0'
+if ($config.showHelp) { $botonAyuda.Foreground = New-Brush $colorPrimario } else { $botonAyuda.Foreground = New-Brush $colorTextoSecundario }
+[System.Windows.Controls.Grid]::SetColumn($botonAyuda, 1)
+$botonAyuda.Add_MouseLeftButtonDown({
+    param($s, $e)
+    $e.Handled = $true
+    $config.showHelp = -not [bool]$config.showHelp
+    Guardar-Config
+    if ($config.showHelp) { $s.Foreground = New-Brush $colorPrimario } else { $s.Foreground = New-Brush $colorTextoSecundario }
+    Refrescar-Ayuda
+    Refrescar-Todo
+})
+$header.Children.Add($botonAyuda) | Out-Null
+
 $cerrar = New-Object System.Windows.Controls.TextBlock
 $cerrar.Text = [char]0x00D7
 $cerrar.Foreground = New-Brush $colorTextoSecundario
 $cerrar.FontSize = 16
 $cerrar.Cursor = 'Hand'
 $cerrar.Margin = '10,0,0,0'
-[System.Windows.Controls.Grid]::SetColumn($cerrar, 1)
+[System.Windows.Controls.Grid]::SetColumn($cerrar, 2)
 $cerrar.Add_MouseLeftButtonDown({
     param($s, $e)
     $e.Handled = $true
@@ -241,19 +355,49 @@ $header.Add_MouseLeftButtonDown({
     if (-not $e.Handled) { $window.DragMove() }
 })
 $panelRaiz.Children.Add($header) | Out-Null
-$panelRaiz.Children.Add((New-Separador)) | Out-Null
 
-# --- Paneles (se reconstruyen en cada tick) ---
-$panelTareas = New-Object System.Windows.Controls.StackPanel
-$panelRaiz.Children.Add($panelTareas) | Out-Null
-$panelRaiz.Children.Add((New-Separador)) | Out-Null
+# --- Menu de secciones (chips que prenden/apagan cada bloque) ---
+$panelMenu = New-Object System.Windows.Controls.WrapPanel
+$panelMenu.Margin = '0,8,0,2'
+$panelRaiz.Children.Add($panelMenu) | Out-Null
 
-$panelClaude = New-Object System.Windows.Controls.StackPanel
-$panelRaiz.Children.Add($panelClaude) | Out-Null
-$panelRaiz.Children.Add((New-Separador)) | Out-Null
+# --- Secciones: cada contenedor arranca con su separador, asi al ocultarlo desaparece todo ---
+function New-ContenedorSeccion {
+    $cont = New-Object System.Windows.Controls.StackPanel
+    $cont.Children.Add((New-Separador)) | Out-Null
+    $panel = New-Object System.Windows.Controls.StackPanel
+    $cont.Children.Add($panel) | Out-Null
+    $cont.Tag = $panel
+    return $cont
+}
 
-$panelOpenCode = New-Object System.Windows.Controls.StackPanel
-$panelRaiz.Children.Add($panelOpenCode) | Out-Null
+$contTareas = New-ContenedorSeccion
+$panelTareas = $contTareas.Tag
+$panelRaiz.Children.Add($contTareas) | Out-Null
+
+$contClaude = New-ContenedorSeccion
+$panelClaude = $contClaude.Tag
+$panelRaiz.Children.Add($contClaude) | Out-Null
+
+$contCodex = New-ContenedorSeccion
+$panelCodex = $contCodex.Tag
+$panelRaiz.Children.Add($contCodex) | Out-Null
+
+$contOpenCode = New-ContenedorSeccion
+$panelOpenCode = $contOpenCode.Tag
+$panelRaiz.Children.Add($contOpenCode) | Out-Null
+
+$contCustom = New-ContenedorSeccion
+$panelCustom = $contCustom.Tag
+$panelRaiz.Children.Add($contCustom) | Out-Null
+
+$contAyuda = New-ContenedorSeccion
+$panelAyuda = $contAyuda.Tag
+$panelRaiz.Children.Add($contAyuda) | Out-Null
+
+function Set-Visible($contenedor, [bool]$visible) {
+    if ($visible) { $contenedor.Visibility = 'Visible' } else { $contenedor.Visibility = 'Collapsed' }
+}
 
 # ================= Tareas =================
 function Get-ProgresoJournal([string]$journalPath) {
@@ -333,6 +477,8 @@ function Get-EtaMinutos([int]$esperados, [int]$completados, [double[]]$duracione
 
 function Refrescar-Tareas {
     $panelTareas.Children.Clear()
+    Set-Visible $contTareas ([bool]$config.sections.tasks)
+    if (-not $config.sections.tasks) { return }
 
     $tareas = @()
     foreach ($ruta in $config.statusPaths) {
@@ -347,13 +493,7 @@ function Refrescar-Tareas {
     $panelTareas.Children.Add((New-EncabezadoSeccion "Tareas" "$activas activas" $null 12)) | Out-Null
 
     if ($tareas.Count -eq 0) {
-        $vacio = New-Object System.Windows.Controls.TextBlock
-        $vacio.Text = "Sin tareas en curso."
-        $vacio.Foreground = New-Brush $colorTextoSecundario
-        $vacio.FontStyle = 'Italic'
-        $vacio.FontSize = 11
-        $vacio.Margin = '0,4,0,0'
-        $panelTareas.Children.Add($vacio) | Out-Null
+        $panelTareas.Children.Add((New-Texto "Sin tareas en curso." 11 $colorTextoSecundario $true '0,4,0,0')) | Out-Null
         return
     }
 
@@ -510,8 +650,59 @@ function Get-UsoClaudeGeneral {
     }
 }
 
+function New-FilaBarra($etiqueta, [int]$porcentaje, $reset, $color) {
+    $contenedor = New-Object System.Windows.Controls.StackPanel
+    $contenedor.Margin = '0,4,0,4'
+
+    $encabezado = New-Object System.Windows.Controls.Grid
+    $colEtiqueta = New-Object System.Windows.Controls.ColumnDefinition
+    $colPorcentaje = New-Object System.Windows.Controls.ColumnDefinition
+    $colPorcentaje.Width = 'Auto'
+    $encabezado.ColumnDefinitions.Add($colEtiqueta)
+    $encabezado.ColumnDefinitions.Add($colPorcentaje)
+
+    $tbEtiqueta = New-Object System.Windows.Controls.TextBlock
+    $tbEtiqueta.Text = $etiqueta
+    $tbEtiqueta.Foreground = New-Brush $colorTexto
+    $tbEtiqueta.FontSize = 11
+    [System.Windows.Controls.Grid]::SetColumn($tbEtiqueta, 0)
+    $encabezado.Children.Add($tbEtiqueta) | Out-Null
+
+    $tbPorcentaje = New-Object System.Windows.Controls.TextBlock
+    $tbPorcentaje.Text = "$porcentaje%"
+    $tbPorcentaje.Foreground = New-Brush $color
+    $tbPorcentaje.FontSize = 11
+    $tbPorcentaje.FontWeight = 'Bold'
+    [System.Windows.Controls.Grid]::SetColumn($tbPorcentaje, 1)
+    $encabezado.Children.Add($tbPorcentaje) | Out-Null
+
+    $contenedor.Children.Add($encabezado) | Out-Null
+
+    $barra = New-Object System.Windows.Controls.ProgressBar
+    $barra.Height = 6
+    $barra.Margin = '0,3,0,2'
+    $barra.Minimum = 0
+    $barra.Maximum = 100
+    $barra.Value = $porcentaje
+    $barra.Foreground = New-Brush $color
+    $barra.Background = New-Brush ([System.Windows.Media.Color]::FromArgb(80, 255, 255, 255))
+    $barra.BorderThickness = 0
+    $contenedor.Children.Add($barra) | Out-Null
+
+    if ($reset) {
+        $tbReset = New-Object System.Windows.Controls.TextBlock
+        $tbReset.Text = $reset
+        $tbReset.Foreground = New-Brush $colorTextoSecundario
+        $tbReset.FontSize = 10
+        $contenedor.Children.Add($tbReset) | Out-Null
+    }
+    return $contenedor
+}
+
 function Refrescar-UsoClaude {
     $panelClaude.Children.Clear()
+    Set-Visible $contClaude ([bool]$config.sections.claude)
+    if (-not $config.sections.claude) { return }
 
     $uso = Get-UsoClaudeGeneral
 
@@ -538,79 +729,118 @@ function Refrescar-UsoClaude {
     $panelClaude.Children.Add((New-EncabezadoSeccion "Uso - Claude" $textoEdad $colorEdad 12)) | Out-Null
 
     if ($null -eq $uso) {
-        $sinDatos = New-Object System.Windows.Controls.TextBlock
-        $sinDatos.Text = "Sin datos de uso todavia."
-        $sinDatos.Foreground = New-Brush $colorTextoSecundario
-        $sinDatos.FontStyle = 'Italic'
-        $sinDatos.FontSize = 11
-        $panelClaude.Children.Add($sinDatos) | Out-Null
+        $panelClaude.Children.Add((New-Texto "Sin datos de uso todavia." 11 $colorTextoSecundario $true)) | Out-Null
         return
     }
 
-    $aclaracion = New-Object System.Windows.Controls.TextBlock
-    $aclaracion.Text = "Cache de la CLI, no se refresca sola - corre /usage en Claude de vez en cuando."
-    $aclaracion.FontSize = 9
-    $aclaracion.FontStyle = 'Italic'
-    $aclaracion.TextWrapping = 'Wrap'
-    $aclaracion.Foreground = New-Brush $colorTextoSecundario
-    $aclaracion.Margin = '0,4,0,2'
-    $panelClaude.Children.Add($aclaracion) | Out-Null
+    $panelClaude.Children.Add((New-Texto "Cache de la CLI, no se refresca sola - corre /usage en Claude de vez en cuando." 9 $colorTextoSecundario $true '0,4,0,2')) | Out-Null
 
-    $filas = @(
-        @{ Etiqueta = "Sesion (5 hs)"; Porcentaje = $uso.CincoHorasPorcentaje; Reset = $uso.CincoHorasReset },
-        @{ Etiqueta = "Semanal (7 dias)"; Porcentaje = $uso.SieteDiasPorcentaje; Reset = $uso.SieteDiasReset }
-    )
+    $panelClaude.Children.Add((New-FilaBarra "Sesion (5 hs)" $uso.CincoHorasPorcentaje $uso.CincoHorasReset (Get-ColorPorPorcentaje $uso.CincoHorasPorcentaje))) | Out-Null
+    $panelClaude.Children.Add((New-FilaBarra "Semanal (7 dias)" $uso.SieteDiasPorcentaje $uso.SieteDiasReset (Get-ColorPorPorcentaje $uso.SieteDiasPorcentaje))) | Out-Null
+}
 
-    foreach ($fila in $filas) {
-        $contenedor = New-Object System.Windows.Controls.StackPanel
-        $contenedor.Margin = '0,4,0,4'
-
-        $encabezado = New-Object System.Windows.Controls.Grid
-        $colEtiqueta = New-Object System.Windows.Controls.ColumnDefinition
-        $colPorcentaje = New-Object System.Windows.Controls.ColumnDefinition
-        $colPorcentaje.Width = 'Auto'
-        $encabezado.ColumnDefinitions.Add($colEtiqueta)
-        $encabezado.ColumnDefinitions.Add($colPorcentaje)
-
-        $etiqueta = New-Object System.Windows.Controls.TextBlock
-        $etiqueta.Text = $fila.Etiqueta
-        $etiqueta.Foreground = New-Brush $colorTexto
-        $etiqueta.FontSize = 11
-        [System.Windows.Controls.Grid]::SetColumn($etiqueta, 0)
-        $encabezado.Children.Add($etiqueta) | Out-Null
-
-        $colorBarra = Get-ColorPorPorcentaje $fila.Porcentaje
-        $porcentajeTexto = New-Object System.Windows.Controls.TextBlock
-        $porcentajeTexto.Text = "$($fila.Porcentaje)%"
-        $porcentajeTexto.Foreground = New-Brush $colorBarra
-        $porcentajeTexto.FontSize = 11
-        $porcentajeTexto.FontWeight = 'Bold'
-        [System.Windows.Controls.Grid]::SetColumn($porcentajeTexto, 1)
-        $encabezado.Children.Add($porcentajeTexto) | Out-Null
-
-        $contenedor.Children.Add($encabezado) | Out-Null
-
-        $barra = New-Object System.Windows.Controls.ProgressBar
-        $barra.Height = 6
-        $barra.Margin = '0,3,0,2'
-        $barra.Minimum = 0
-        $barra.Maximum = 100
-        $barra.Value = $fila.Porcentaje
-        $barra.Foreground = New-Brush $colorBarra
-        $barra.Background = New-Brush ([System.Windows.Media.Color]::FromArgb(80, 255, 255, 255))
-        $barra.BorderThickness = 0
-        $contenedor.Children.Add($barra) | Out-Null
-
-        if ($fila.Reset) {
-            $resetTexto = New-Object System.Windows.Controls.TextBlock
-            $resetTexto.Text = $fila.Reset
-            $resetTexto.Foreground = New-Brush $colorTextoSecundario
-            $resetTexto.FontSize = 10
-            $contenedor.Children.Add($resetTexto) | Out-Null
-        }
-
-        $panelClaude.Children.Add($contenedor) | Out-Null
+# ================= Uso de Codex =================
+function Get-UsoCodex {
+    if ($null -ne $script:usoCodexLeidoEn -and
+        ((Get-Date) - $script:usoCodexLeidoEn).TotalSeconds -lt $config.codexRefreshSeconds) {
+        return $script:usoCodex
     }
+    $script:usoCodexLeidoEn = Get-Date
+    $script:usoCodex = $null
+    if (-not (Test-Path $codexSessionsDir)) { return $script:usoCodex }
+
+    # Cada sesion de Codex es un rollout-*.jsonl; el ultimo evento token_count de cada archivo
+    # trae el acumulado de ESA sesion (total_token_usage) y, si la version lo guarda, los
+    # rate limits (5 hs / semanal). Se suman los archivos modificados hoy.
+    $hoy = (Get-Date).Date
+    $archivos = @(Get-ChildItem -LiteralPath $codexSessionsDir -Recurse -File -Filter '*.jsonl' -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -ge $hoy })
+
+    $input = 0.0; $cache = 0.0; $output = 0.0; $razonamiento = 0.0
+    $rate5 = $null; $rate7 = $null; $reset5 = $null; $reset7 = $null
+    foreach ($f in $archivos) {
+        try {
+            $texto = $null
+            $tail = @(Get-Content -LiteralPath $f.FullName -Tail 600 -ErrorAction Stop)
+            for ($i = $tail.Count - 1; $i -ge 0; $i--) {
+                if ($tail[$i] -match '"token_count"') { $texto = $tail[$i]; break }
+            }
+            if (-not $texto -and $f.Length -lt 25MB) {
+                $m = Select-String -LiteralPath $f.FullName -Pattern '"token_count"' -ErrorAction SilentlyContinue | Select-Object -Last 1
+                if ($m) { $texto = $m.Line }
+            }
+            if (-not $texto) { continue }
+            $ev = $texto | ConvertFrom-Json -ErrorAction Stop
+            $tu = $ev.payload.info.total_token_usage
+            if ($tu) {
+                $input += [double]$tu.input_tokens
+                $cache += [double]$tu.cached_input_tokens
+                $output += [double]$tu.output_tokens
+                $razonamiento += [double]$tu.reasoning_output_tokens
+            }
+            $rl = $ev.payload.rate_limits
+            if ($rl) {
+                if ($null -ne $rl.primary.used_percent) { $rate5 = [int][math]::Round([double]$rl.primary.used_percent) }
+                if ($null -ne $rl.secondary.used_percent) { $rate7 = [int][math]::Round([double]$rl.secondary.used_percent) }
+                if ($null -ne $rl.primary.resets_at) { $reset5 = Format-ResetUnix $rl.primary.resets_at }
+                if ($null -ne $rl.secondary.resets_at) { $reset7 = Format-ResetUnix $rl.secondary.resets_at }
+            }
+        } catch { }
+    }
+
+    $script:usoCodex = [PSCustomObject]@{
+        Sesiones     = $archivos.Count
+        TokenIn      = $input
+        TokenCache   = $cache
+        TokenOut     = $output
+        Razonamiento = $razonamiento
+        Rate5        = $rate5
+        Rate7        = $rate7
+        Reset5       = $reset5
+        Reset7       = $reset7
+    }
+    return $script:usoCodex
+}
+
+function Refrescar-UsoCodex {
+    $panelCodex.Children.Clear()
+    Set-Visible $contCodex ([bool]$config.sections.codex)
+    if (-not $config.sections.codex) { return }
+
+    $textoEdad = $null
+    if ($null -ne $script:usoCodexLeidoEn) {
+        $seg = ((Get-Date) - $script:usoCodexLeidoEn).TotalSeconds
+        if ($seg -lt 90) { $textoEdad = "actualizado hace $([math]::Round($seg))s" }
+        else { $textoEdad = "actualizado hace $(Format-Duracion ($seg / 60))" }
+    } else {
+        $textoEdad = "sin datos"
+    }
+    $panelCodex.Children.Add((New-EncabezadoSeccion "Uso - Codex (hoy)" $textoEdad $colorCodex 12)) | Out-Null
+
+    $uso = Get-UsoCodex
+    if ($null -eq $uso) {
+        $panelCodex.Children.Add((New-Texto "No encontre sesiones de Codex (~/.codex/sessions)." 11 $colorTextoSecundario $true)) | Out-Null
+        return
+    }
+    if ($uso.Sesiones -eq 0) {
+        $panelCodex.Children.Add((New-Texto "Sin sesiones de Codex hoy." 11 $colorTextoSecundario $true)) | Out-Null
+        return
+    }
+
+    if ($null -ne $uso.Rate5) {
+        $panelCodex.Children.Add((New-FilaBarra "Sesion (5 hs)" $uso.Rate5 $uso.Reset5 (Get-ColorPorPorcentaje $uso.Rate5))) | Out-Null
+    }
+    if ($null -ne $uso.Rate7) {
+        $panelCodex.Children.Add((New-FilaBarra "Semanal (7 dias)" $uso.Rate7 $uso.Reset7 (Get-ColorPorPorcentaje $uso.Rate7))) | Out-Null
+    }
+
+    $sesionTxt = if ($uso.Sesiones -eq 1) { "1 sesion" } else { "$($uso.Sesiones) sesiones" }
+    $panelCodex.Children.Add((New-Texto $sesionTxt 11 $colorTexto $false '0,4,0,2')) | Out-Null
+    $lineaTokens = "Tokens: $(Format-Numero $uso.TokenIn) in"
+    if ($uso.TokenCache -gt 0) { $lineaTokens += " ($(Format-Numero $uso.TokenCache) cache)" }
+    $lineaTokens += " - $(Format-Numero $uso.TokenOut) out"
+    if ($uso.Razonamiento -gt 0) { $lineaTokens += " - $(Format-Numero $uso.Razonamiento) razonamiento" }
+    $panelCodex.Children.Add((New-Texto $lineaTokens 11 $colorTextoSecundario)) | Out-Null
 }
 
 # ================= Uso de OpenCode =================
@@ -662,6 +892,8 @@ function Get-UsoOpenCode {
 
 function Refrescar-UsoOpenCode {
     $panelOpenCode.Children.Clear()
+    Set-Visible $contOpenCode ([bool]$config.sections.opencode)
+    if (-not $config.sections.opencode) { return }
 
     $uso = Get-UsoOpenCode
 
@@ -676,14 +908,7 @@ function Refrescar-UsoOpenCode {
     $panelOpenCode.Children.Add((New-EncabezadoSeccion "Uso - OpenCode (hoy)" $textoEdad $colorOpenCode 12)) | Out-Null
 
     if ($null -eq $uso) {
-        $sinDatos = New-Object System.Windows.Controls.TextBlock
-        $sinDatos.Text = "Sin datos: no encontre el CLI de OpenCode (config.json -> opencodeCliPath) o el servicio no responde."
-        $sinDatos.Foreground = New-Brush $colorTextoSecundario
-        $sinDatos.FontStyle = 'Italic'
-        $sinDatos.FontSize = 10
-        $sinDatos.TextWrapping = 'Wrap'
-        $sinDatos.Margin = '0,4,0,0'
-        $panelOpenCode.Children.Add($sinDatos) | Out-Null
+        $panelOpenCode.Children.Add((New-Texto "Sin datos: no encontre el CLI de OpenCode (config.json -> opencodeCliPath) o el servicio no responde." 10 $colorTextoSecundario $true '0,4,0,0')) | Out-Null
         return
     }
 
@@ -691,39 +916,190 @@ function Refrescar-UsoOpenCode {
     $promptTxt = if ($uso.Prompts -eq 1) { "1 prompt" } else { "$($uso.Prompts) prompts" }
     $pasoTxt = if ($uso.Pasos -eq 1) { "1 paso" } else { "$($uso.Pasos) pasos" }
 
-    $linea1 = New-Object System.Windows.Controls.TextBlock
-    $linea1.Text = "$sesionTxt - $promptTxt - $pasoTxt"
-    $linea1.Foreground = New-Brush $colorTexto
-    $linea1.FontSize = 11
-    $linea1.Margin = '0,4,0,2'
-    $panelOpenCode.Children.Add($linea1) | Out-Null
-
-    $linea2 = New-Object System.Windows.Controls.TextBlock
-    $linea2.Text = "Tokens: $(Format-Numero $uso.TokenIn) in - $(Format-Numero $uso.TokenOut) out - $(Format-Numero $uso.TokenCache) cache"
-    $linea2.Foreground = New-Brush $colorTextoSecundario
-    $linea2.FontSize = 11
-    $linea2.Margin = '0,0,0,2'
-    $panelOpenCode.Children.Add($linea2) | Out-Null
-
+    $panelOpenCode.Children.Add((New-Texto "$sesionTxt - $promptTxt - $pasoTxt" 11 $colorTexto $false '0,4,0,2')) | Out-Null
+    $panelOpenCode.Children.Add((New-Texto "Tokens: $(Format-Numero $uso.TokenIn) in - $(Format-Numero $uso.TokenOut) out - $(Format-Numero $uso.TokenCache) cache" 11 $colorTextoSecundario)) | Out-Null
     $costoTxt = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0:0.00}', $uso.Costo)
-    $linea3 = New-Object System.Windows.Controls.TextBlock
-    $linea3.Text = "Costo: `$ $costoTxt"
-    $linea3.Foreground = New-Brush $colorTextoSecundario
-    $linea3.FontSize = 11
-    $panelOpenCode.Children.Add($linea3) | Out-Null
+    $panelOpenCode.Children.Add((New-Texto "Costo: `$ $costoTxt" 11 $colorTextoSecundario)) | Out-Null
 }
 
-# ================= Arranque =================
-Refrescar-Tareas
-Refrescar-UsoClaude
-Refrescar-UsoOpenCode
+# ================= Proveedores propios (config.json -> customProviders) =================
+function Get-UsoProviderCustom($prov) {
+    # Cada proveedor custom tiene: id, name, y o bien command (+args) que devuelve JSON por
+    # stdout, o bien file (un JSON local). El JSON acepta: sessions, prompts, steps,
+    # tokens {input, output, cache {read, write}}, cost.
+    $id = [string]$prov['id']
+    $refresh = 60
+    if ($prov['refreshSeconds']) { $refresh = [int]$prov['refreshSeconds'] }
+    if ($script:customLeido[$id] -and ((Get-Date) - $script:customLeido[$id]).TotalSeconds -lt $refresh) {
+        return $script:customUso[$id]
+    }
+    $script:customLeido[$id] = Get-Date
+    try {
+        $json = $null
+        if ($prov['file']) {
+            $rutaArchivo = [string]$prov['file']
+            if (-not [System.IO.Path]::IsPathRooted($rutaArchivo)) { $rutaArchivo = Join-Path $scriptDir $rutaArchivo }
+            $json = Read-ArchivoCompartido $rutaArchivo
+        } else {
+            $argsProv = @()
+            if ($prov['args']) { $argsProv = @($prov['args']) }
+            $json = & ([string]$prov['command']) @argsProv 2>$null | Out-String
+        }
+        $j = $json | ConvertFrom-Json -ErrorAction Stop
+        $script:customUso[$id] = [PSCustomObject]@{
+            Sesiones   = [int]$j.sessions
+            Prompts    = [int]$j.prompts
+            Pasos      = [int]$j.steps
+            TokenIn    = [double]$j.tokens.input
+            TokenOut   = [double]$j.tokens.output
+            TokenCache = [double]$j.tokens.cache.read + [double]$j.tokens.cache.write
+            Costo      = [double]$j.cost
+        }
+    } catch {
+        $script:customUso[$id] = $null
+    }
+    return $script:customUso[$id]
+}
+
+function Refrescar-ProvidersCustom {
+    $panelCustom.Children.Clear()
+    $visibles = @($config.customProviders | Where-Object { [bool]$config.sections['custom:' + [string]$_['id']] })
+    Set-Visible $contCustom ($visibles.Count -gt 0)
+    if ($visibles.Count -eq 0) { return }
+
+    foreach ($prov in $visibles) {
+        $id = [string]$prov['id']
+        $nombre = $id
+        if ($prov['name']) { $nombre = [string]$prov['name'] }
+        $uso = Get-UsoProviderCustom $prov
+
+        $textoEdad = $null
+        if ($script:customLeido[$id] -and $null -ne $uso) {
+            $seg = ((Get-Date) - $script:customLeido[$id]).TotalSeconds
+            if ($seg -lt 90) { $textoEdad = "actualizado hace $([math]::Round($seg))s" }
+            else { $textoEdad = "actualizado hace $(Format-Duracion ($seg / 60))" }
+        }
+        $panelCustom.Children.Add((New-EncabezadoSeccion "Uso - $nombre (hoy)" $textoEdad $colorCustom 12)) | Out-Null
+
+        if ($null -eq $uso) {
+            $panelCustom.Children.Add((New-Texto "Sin datos: revisa command/file y args del proveedor en config.json." 10 $colorTextoSecundario $true '0,4,0,0')) | Out-Null
+            continue
+        }
+        $detalle = @()
+        if ($uso.Sesiones -or $uso.Prompts -or $uso.Pasos) {
+            $detalle += "$($uso.Sesiones) sesiones - $($uso.Prompts) prompts - $($uso.Pasos) pasos"
+        }
+        if ($uso.TokenIn -or $uso.TokenOut -or $uso.TokenCache) {
+            $detalle += "Tokens: $(Format-Numero $uso.TokenIn) in - $(Format-Numero $uso.TokenOut) out - $(Format-Numero $uso.TokenCache) cache"
+        }
+        if ($uso.Costo -gt 0) {
+            $costoTxt = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0:0.00}', $uso.Costo)
+            $detalle += "Costo: `$ $costoTxt"
+        }
+        if ($detalle.Count -eq 0) { $detalle += "Sin metricas para hoy." }
+        foreach ($l in $detalle) {
+            $panelCustom.Children.Add((New-Texto $l 11 $colorTextoSecundario)) | Out-Null
+        }
+    }
+}
+
+# ================= Ayuda =================
+function Refrescar-Ayuda {
+    $panelAyuda.Children.Clear()
+    Set-Visible $contAyuda ([bool]$config.showHelp)
+    if (-not $config.showHelp) { return }
+
+    $panelAyuda.Children.Add((New-EncabezadoSeccion "Como funciona" $null $null 12)) | Out-Null
+    $lineas = @(
+        '· Tareas: los agentes escriben status.json al lanzar tareas largas. Si la tarea trae journalPath, se cuenta 1 linea por agente ("started"/"result") y el ETA usa la duracion real de los agentes YA terminados.'
+        '· Claude: lee el cache de uso que la CLI deja en ~/.claude.json. No se refresca solo: corre /usage en Claude de vez en cuando.'
+        '· Codex: suma los tokens del dia desde las sesiones locales (~/.codex/sessions/<fecha>/*.jsonl) y, si el log los trae, muestra los limites de 5 hs / semanal.'
+        '· OpenCode: corre `opencode stats --days 0 --json` cada 60 segundos.'
+        '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Deben devolver: sessions, tokens {input, output, cache}, cost.'
+        '· El menu de chips de arriba prende y apaga cada seccion; la eleccion se guarda en config.json.'
+        '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.'
+    )
+    foreach ($l in $lineas) {
+        $panelAyuda.Children.Add((New-Texto $l 10 $colorTextoSecundario $false '0,3,0,3')) | Out-Null
+    }
+}
+
+# ================= Menu de secciones =================
+$seccionesMenu = @(
+    @{ id = 'tasks'; nombre = 'Tareas' },
+    @{ id = 'claude'; nombre = 'Claude' },
+    @{ id = 'codex'; nombre = 'Codex' },
+    @{ id = 'opencode'; nombre = 'OpenCode' }
+)
+foreach ($prov in $config.customProviders) {
+    if ($prov['id'] -and $prov['name']) {
+        $seccionesMenu += @{ id = 'custom:' + [string]$prov['id']; nombre = [string]$prov['name'] }
+    }
+}
+
+# El handler lee el id desde el Tag del chip: un scriptblock por chip capturaria mal la
+# variable del loop (en PowerShell los closures comparten la variable del foreach).
+$chipHandler = {
+    param($s, $e)
+    $sid = [string]$s.Tag
+    $config.sections[$sid] = -not [bool]$config.sections[$sid]
+    Guardar-Config
+    Actualizar-Menu
+    Refrescar-Todo
+}
+
+function Construir-Menu {
+    $panelMenu.Children.Clear()
+    foreach ($sec in $seccionesMenu) {
+        $chip = New-Object System.Windows.Controls.Border
+        $chip.Tag = $sec.id
+        $chip.CornerRadius = 8
+        $chip.BorderThickness = 1
+        $chip.Padding = '6,2,6,2'
+        $chip.Margin = '0,0,6,4'
+        $chip.Cursor = 'Hand'
+        $txt = New-Object System.Windows.Controls.TextBlock
+        $txt.FontSize = 10
+        $txt.Text = $sec.nombre
+        $chip.Child = $txt
+        $chip.Add_MouseLeftButtonDown($chipHandler)
+        $panelMenu.Children.Add($chip) | Out-Null
+    }
+    Actualizar-Menu
+}
+
+function Actualizar-Menu {
+    foreach ($chip in $panelMenu.Children) {
+        $activo = [bool]$config.sections[[string]$chip.Tag]
+        if ($activo) {
+            $chip.BorderBrush = New-Brush $colorPrimario
+            $chip.Background = New-Brush ([System.Windows.Media.Color]::FromArgb(40, 249, 115, 22))
+            $chip.Child.Foreground = New-Brush $colorTexto
+        } else {
+            $chip.BorderBrush = New-Brush $colorBorde
+            $chip.Background = [System.Windows.Media.Brushes]::Transparent
+            $chip.Child.Foreground = New-Brush $colorTextoSecundario
+        }
+    }
+}
+
+# ================= Refresco total =================
+function Refrescar-Todo {
+    Refrescar-Tareas
+    Refrescar-UsoClaude
+    Refrescar-UsoCodex
+    Refrescar-UsoOpenCode
+    Refrescar-ProvidersCustom
+    Refrescar-Ayuda
+}
+
+Construir-Menu
+Refrescar-Todo
 
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromSeconds(2)
 $timer.Add_Tick({
-    Refrescar-Tareas
-    Refrescar-UsoClaude
-    Refrescar-UsoOpenCode
+    Refrescar-Todo
 })
 $timer.Start()
 
@@ -742,18 +1118,22 @@ if ($env:AI_PROGRESS_CAPTURE) {
     $captura.Add_Tick({
         $captura.Stop()
         try {
-            $src = [System.Windows.PresentationSource]::FromVisual($window)
-            $m = $src.CompositionTarget.TransformToDevice
-            $ancho = [int][math]::Ceiling($window.ActualWidth * $m.M11)
-            $alto = [int][math]::Ceiling($window.ActualHeight * $m.M22)
-            $x = [int][math]::Round($window.Left * $m.M11)
-            $y = [int][math]::Round($window.Top * $m.M22)
+            # PointToScreen convierte DIPs a pixeles con el DPI real: evita que la region
+            # capturada se corra si la pantalla no esta al 100%.
+            $p1 = $window.PointToScreen([System.Windows.Point]::new(0, 0))
+            $p2 = $window.PointToScreen([System.Windows.Point]::new($window.ActualWidth, $window.ActualHeight))
+            $ancho = [int][math]::Ceiling($p2.X - $p1.X)
+            $alto = [int][math]::Ceiling($p2.Y - $p1.Y)
+            $x = [int][math]::Round($p1.X)
+            $y = [int][math]::Round($p1.Y)
             $dir = Split-Path -Parent $env:AI_PROGRESS_CAPTURE
             if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
             $bmp = New-Object System.Drawing.Bitmap $ancho, $alto
             $g = [System.Drawing.Graphics]::FromImage($bmp)
             $g.CopyFromScreen($x, $y, 0, 0, $bmp.Size)
             $bmp.Save($env:AI_PROGRESS_CAPTURE, [System.Drawing.Imaging.ImageFormat]::Png)
+            $logTxt = "Actual=$($window.ActualWidth)x$($window.ActualHeight) Left=$($window.Left) Top=$($window.Top) p1=($($p1.X),$($p1.Y)) p2=($($p2.X),$($p2.Y)) crop=${ancho}x${alto}"
+            Set-Content -LiteralPath ($env:AI_PROGRESS_CAPTURE + '.log') -Value $logTxt -Encoding UTF8
             $g.Dispose()
             $bmp.Dispose()
         } catch { }
