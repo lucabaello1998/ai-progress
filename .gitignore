@@ -1,6 +1,7 @@
 # Estado vivo: lo escribe cada agente al lanzar tareas largas.
 status.json
-# Config local (rutas y preferencias de cada máquina).
+# Config local (rutas y preferencias de cada máquina) y su backup (queda si el JSON estaba roto).
 config.json
+config.json.bak
 # Logs del modo captura (AI_PROGRESS_CAPTURE).
 *.log

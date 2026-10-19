@@ -14,8 +14,8 @@ Widget flotante para Windows que muestra, siempre visible arriba a la derecha:
 5. **Otros modelos** — proveedores propios definidos en `config.json` (un comando CLI o un
    archivo JSON con métricas).
 
-El **menú hamburguesa** (arriba a la derecha) abre un **popup flotante** — fondo más oscuro, no
-empuja el contenido — con *switchs* para prender/apagar cada sección y el switch **Modo claro**
+El **menú hamburguesa** (arriba a la derecha) abre un **popup flotante** — con fondo y borde
+propios, no empuja el contenido — con *switchs* para prender/apagar cada sección y el switch **Modo claro**
 (tema claro/oscuro); todo se guarda en `config.json`. El botón **?** muestra la explicación de cómo
 funciona dentro del propio widget, y al pie del popup está la leyenda del autor.
 
@@ -36,14 +36,14 @@ Modo claro (switch **Modo claro** del menú):
 ## Historia
 
 `ai-progress` es la evolución de un proyecto personal anterior: **`claude-progress`**, un widget
-mínimo que armé para mirar el uso de Claude Code (ventana de 5 h y límite semanal) mientras corría
-workflows largos de agentes. Nunca fue un repo: vivió siempre en una carpeta local, como
-herramienta de trabajo.
+mínimo que armé para mirar el uso de Claude Code (ventana de 5 h y límite semanal) y el progreso
+de sus tareas de background, mientras corría workflows largos de agentes. Nunca fue un repo: vivió
+siempre en una carpeta local, como herramienta de trabajo.
 
 Cuando el día a día se repartió entre más herramientas — Codex, OpenCode, Claude, workflows
-multiagente — ese widget se quedó corto: solo miraba a Claude y no sabía nada de las tareas en
-curso. `ai-progress` es la generalización: un monitor flotante para todas las herramientas de IA,
-con progreso real de tareas, uso por proveedor, menú de secciones y tema claro/oscuro.
+multiagente — ese widget se quedó corto: miraba solo a Claude Code y no sabía nada de las otras
+herramientas. `ai-progress` es la generalización: un monitor flotante para todas las herramientas
+de IA, con progreso real de tareas, uso por proveedor, menú de secciones y tema claro/oscuro.
 
 La idea de fondo no cambió: pegarle un vistazo y saber qué está pasando, sin abrir una terminal ni
 cambiar de ventana.
@@ -117,10 +117,12 @@ propio widget lo reescribe cuando usás el menú hamburguesa o el botón **?**.
 
 ### Proveedores propios (`customProviders`)
 
-Cada proveedor agrega una sección (y su chip en el menú). Dos formas de obtener los datos:
+Cada proveedor agrega una sección, y una fila en el menú para prenderla/apagarla si le ponés
+`name` (sin `name` igual aparece la sección, con el `id`). Formas de obtener los datos:
 
 - `command` (+ `args` opcional): se ejecuta y tiene que imprimir **JSON por stdout**.
-- `file`: ruta a un JSON local (se relee en cada refresco).
+- `file`: ruta a un JSON local (se relee cada `refreshSeconds`).
+- `refreshSeconds` (opcional): cada cuánto se ejecuta/relee; default 60 s.
 
 JSON esperado — todos los campos son opcionales:
 
@@ -154,3 +156,4 @@ Ejemplo de configuración (para cualquier CLI que exponga stats en JSON):
   edad del dato). Codex se recalcula cada 60 s desde los logs; si no hubo sesiones hoy, lo dice.
 - Viene del widget personal para Claude Code `claude-progress`, generalizado a IA en general
   (ver **Historia**).
+- Sin licencia publicada: todos los derechos reservados.

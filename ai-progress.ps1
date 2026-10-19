@@ -20,7 +20,7 @@
 #   5) OTROS: proveedores propios definidos en config.json -> customProviders (un comando CLI
 #      o un archivo JSON que devuelva metrics con forma {sessions, prompts, steps, tokens, cost}).
 #
-# MENU (hamburguesa arriba a la derecha): abre un popup flotante -fondo mas oscuro, no empuja
+# MENU (hamburguesa arriba a la derecha): abre un popup flotante -fondo y borde propios, no empuja
 # el contenido- con switchs para prender/apagar cada seccion y el switch "Modo claro" (tema
 # dark/light). Las elecciones se guardan en config.json (sections / theme). Al final del popup
 # va la leyenda "Hecho por Luca Baello".
@@ -60,19 +60,44 @@ $config = @{
     theme                  = 'dark'
     customProviders        = @()
 }
+# El -AsHashtable de pwsh devuelve mapas case-sensitive ("Theme" no matchea "theme"): normalizo
+# a Hashtable comun (case-insensitive), recursivo, para que las claves del usuario matcheen
+# aunque varíen mayusculas (y despues Guardar-Config reescribe las canonicas).
+function Convertir-MapaCI($valor) {
+    if ($valor -is [System.Collections.IDictionary]) {
+        $ci = @{}
+        foreach ($clave in @($valor.Keys)) { $ci[[string]$clave] = Convertir-MapaCI $valor[$clave] }
+        return $ci
+    }
+    if ($valor -is [System.Collections.IEnumerable] -and $valor -isnot [string]) {
+        # La coma evita que PowerShell desenrolle arrays de 1 elemento al volver de la funcion.
+        return ,@(foreach ($item in $valor) { Convertir-MapaCI $item })
+    }
+    return $valor
+}
 $configPath = Join-Path $scriptDir 'config.json'
 if (Test-Path $configPath) {
     try {
         # Get-Content (no Read-ArchivoCompartido): esta funcion se define mas abajo.
         $cfg = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+        # JSON valido pero que no es un objeto (p.ej. un array top-level): cuenta como config roto.
+        if ($cfg -isnot [System.Collections.IDictionary]) { throw 'config.json no es un objeto JSON' }
+        $cfg = Convertir-MapaCI $cfg
         if ($cfg['statusPaths']) {
             $config.statusPaths = @($cfg['statusPaths'] | ForEach-Object {
                 if ([System.IO.Path]::IsPathRooted([string]$_)) { [string]$_ } else { Join-Path $scriptDir ([string]$_) }
             })
         }
         if ($cfg['opencodeCliPath']) { $config.opencodeCliPath = [string]$cfg['opencodeCliPath'] }
-        if ($cfg['opencodeRefreshSeconds']) { $config.opencodeRefreshSeconds = [int]$cfg['opencodeRefreshSeconds'] }
-        if ($cfg['codexRefreshSeconds']) { $config.codexRefreshSeconds = [int]$cfg['codexRefreshSeconds'] }
+        # TryParse + >0: un valor raro ("abc", 1e300, -5) no debe tirar toda la config ni forzar
+        # refresco en cada tick; en esos casos queda el default.
+        $seg = 0
+        if ($cfg['opencodeRefreshSeconds'] -and [int]::TryParse([string]$cfg['opencodeRefreshSeconds'], [ref]$seg) -and $seg -gt 0) {
+            $config.opencodeRefreshSeconds = $seg
+        }
+        if ($cfg['codexRefreshSeconds'] -and [int]::TryParse([string]$cfg['codexRefreshSeconds'], [ref]$seg) -and $seg -gt 0) {
+            $config.codexRefreshSeconds = $seg
+        }
         if ($cfg['sections']) {
             foreach ($clave in @($cfg['sections'].Keys)) { $config.sections[[string]$clave] = [bool]$cfg['sections'][$clave] }
         }
@@ -81,7 +106,11 @@ if (Test-Path $configPath) {
         if ($cfg['customProviders']) {
             $config.customProviders = @($cfg['customProviders'] | Where-Object { $_['id'] -and ($_['command'] -or $_['file']) })
         }
-    } catch { }
+    } catch {
+        # El archivo existe pero no se pudo leer/parsear: guardo una copia antes de que el
+        # primer Guardar-Config lo pise con defaults (queda recuperable en config.json.bak).
+        try { Copy-Item -LiteralPath $configPath -Destination ($configPath + '.bak') -Force } catch { }
+    }
 }
 foreach ($prov in $config.customProviders) {
     $cid = 'custom:' + [string]$prov['id']
@@ -128,9 +157,33 @@ function Format-Duracion([double]$minutos) {
 }
 
 function Format-Numero([double]$n) {
+    if ([double]::IsNaN($n) -or [double]::IsInfinity($n)) { return "0" }
     if ($n -ge 1000000) { return "$([math]::Round($n / 1000000, 1))M" }
     if ($n -ge 1000) { return "$([math]::Round($n / 1000, 1))k" }
     return [string][int]$n
+}
+
+function Convertir-Numero($valor, [double]$defecto = 0) {
+    # Cast defensivo para datos externos (status.json): "50%", NaN, Infinity o basura no deben
+    # romper la fila con errores repetidos; se cae al valor por defecto.
+    if ($null -eq $valor) { return $defecto }
+    $d = 0.0
+    if ($valor -is [double]) { $d = $valor }
+    elseif ($valor -is [int] -or $valor -is [long] -or $valor -is [single] -or $valor -is [decimal]) { $d = [double]$valor }
+    elseif (-not [double]::TryParse([string]$valor, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$d)) {
+        return $defecto
+    }
+    if ([double]::IsNaN($d) -or [double]::IsInfinity($d)) { return $defecto }
+    return $d
+}
+
+function Convertir-Entero($valor, [int]$defecto = 0) {
+    # Como Convertir-Numero pero devolviendo [int] con clamp: un 1e300 en status.json no debe
+    # lanzar un error de cast repetido en cada tick.
+    $d = Convertir-Numero $valor ([double]$defecto)
+    if ($d -gt 1000000000) { return 1000000000 }
+    if ($d -lt -1000000000) { return -1000000000 }
+    return [int]$d
 }
 
 function Format-FechaResetLocal($local) {
@@ -245,6 +298,7 @@ function New-Texto([string]$texto, [double]$tamano = 11, $color = $null, [bool]$
 
 function Guardar-Config {
     # Persiste las preferencias de UI y los proveedores (config.json queda gitignored).
+    # Merge sobre lo que ya haya en el archivo: las claves desconocidas del usuario se conservan.
     try {
         $obj = @{
             statusPaths            = @($config.statusPaths)
@@ -256,7 +310,22 @@ function Guardar-Config {
             theme                  = [string]$config.theme
             customProviders        = @($config.customProviders)
         }
-        $obj | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding UTF8
+        $salida = $obj
+        try {
+            if (Test-Path $configPath) {
+                $previo = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+                if ($previo -is [System.Collections.IDictionary]) {
+                    foreach ($clave in @($obj.Keys)) {
+                        # Si el usuario escribio la clave con otra capitalizacion, la reemplazo
+                        # en vez de dejar las dos variantes.
+                        foreach ($existente in @($previo.Keys | Where-Object { [string]$_ -ieq [string]$clave })) { $previo.Remove($existente) }
+                        $previo[$clave] = $obj[$clave]
+                    }
+                    $salida = $previo
+                }
+            }
+        } catch { }
+        $salida | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding UTF8
     } catch { }
 }
 
@@ -285,7 +354,7 @@ function Aplicar-Tema {
         $script:colorPopupBorde = [System.Windows.Media.Color]::FromRgb(209, 213, 219)
         $script:colorRielOff = [System.Windows.Media.Color]::FromRgb(203, 213, 225)
         $script:colorPalanca = [System.Windows.Media.Color]::FromRgb(255, 255, 255)
-        $script:colorDim = [System.Windows.Media.Color]::FromRgb(148, 155, 165)
+        $script:colorDim = [System.Windows.Media.Color]::FromRgb(124, 131, 142)
         $script:opacidadSombra = 0.25
     } else {
         $script:colorFondo = [System.Windows.Media.Color]::FromArgb($alphaFondo, 30, 37, 48)     # #1E2530
@@ -320,6 +389,7 @@ function Repintar-Tema {
     $marcoPopup.Background = New-Brush $colorPopupFondo
     $marcoPopup.BorderBrush = New-Brush $colorPopupBorde
     $sombraPopup.Opacity = $opacidadSombra
+    foreach ($sep in $separadoresSeccion) { $sep.Background = New-Brush $colorBorde }
     foreach ($lineaMenu in $lineasHamburguesa.Children) {
         if ($popup.IsOpen) { $lineaMenu.Background = New-Brush $colorPrimario } else { $lineaMenu.Background = New-Brush $colorTextoSecundario }
     }
@@ -467,7 +537,7 @@ $header.Add_MouseLeftButtonDown({
 })
 $panelRaiz.Children.Add($header) | Out-Null
 
-# --- Popup del menu (flota sobre el contenido; fondo mas oscuro para distinguir las opciones) ---
+# --- Popup del menu (flota sobre el contenido; fondo y borde propios para distinguir las opciones) ---
 $popup = New-Object System.Windows.Controls.Primitives.Popup
 $popup.PlacementTarget = $botonMenu
 $popup.Placement = 'Bottom'
@@ -502,9 +572,14 @@ $popup.Add_Closed({
 })
 
 # --- Secciones: cada contenedor arranca con su separador, asi al ocultarlo desaparece todo ---
+# El separador se crea UNA vez (los refrescos solo rehacen el panel interno), por eso queda
+# anotado en una lista para que Repintar-Tema lo repinte al cambiar de tema.
+$script:separadoresSeccion = @()
 function New-ContenedorSeccion {
     $cont = New-Object System.Windows.Controls.StackPanel
-    $cont.Children.Add((New-Separador)) | Out-Null
+    $sep = New-Separador
+    $script:separadoresSeccion += $sep
+    $cont.Children.Add($sep) | Out-Null
     $panel = New-Object System.Windows.Controls.StackPanel
     $cont.Children.Add($panel) | Out-Null
     $cont.Tag = $panel
@@ -660,12 +735,9 @@ function Refrescar-Tareas {
             $enVuelo = $progreso.EnVuelo
         }
 
-        $esperados = 0
-        if ($tarea.expectedAgents) { $esperados = [int]$tarea.expectedAgents }
-        $total = 0
-        if ($tarea.total) { $total = [int]$tarea.total }
-        $hechos = 0
-        if ($null -ne $tarea.done) { $hechos = [int]$tarea.done }
+        $esperados = Convertir-Entero $tarea.expectedAgents
+        $total = Convertir-Entero $tarea.total
+        $hechos = Convertir-Entero $tarea.done
 
         $barra = New-Object System.Windows.Controls.ProgressBar
         $barra.Height = 8
@@ -696,7 +768,7 @@ function Refrescar-Tareas {
         } elseif ($null -ne $tarea.progress) {
             $barra.IsIndeterminate = $false
             $barra.Minimum = 0; $barra.Maximum = 1
-            $barra.Value = [math]::Max(0, [math]::Min(1, [double]$tarea.progress))
+            $barra.Value = [math]::Max(0, [math]::Min(1, (Convertir-Numero $tarea.progress)))
         } else {
             $barra.IsIndeterminate = $true
         }
@@ -735,7 +807,7 @@ function Refrescar-Tareas {
             } elseif ($total -gt 0) {
                 $detalle.Text = "$hechos/$total - hace $(Format-Duracion $elapsedMin)"
             } elseif ($null -ne $tarea.progress) {
-                $pct = [math]::Round([double]$tarea.progress * 100)
+                $pct = [math]::Round((Convertir-Numero $tarea.progress) * 100)
                 $detalle.Text = "$pct% - hace $(Format-Duracion $elapsedMin)"
             } else {
                 $detalle.Text = "En progreso - hace $(Format-Duracion $elapsedMin)"
@@ -1069,7 +1141,11 @@ function Get-UsoProviderCustom($prov) {
     # tokens {input, output, cache {read, write}}, cost.
     $id = [string]$prov['id']
     $refresh = 60
-    if ($prov['refreshSeconds']) { $refresh = [int]$prov['refreshSeconds'] }
+    if ($prov['refreshSeconds']) {
+        # Solo acepto valores razonables (1 s a 24 h): un 1e300 no debe congelar la fila para siempre.
+        $candidato = Convertir-Entero $prov['refreshSeconds'] 60
+        if ($candidato -ge 1 -and $candidato -le 86400) { $refresh = $candidato }
+    }
     if ($script:customLeido[$id] -and ((Get-Date) - $script:customLeido[$id]).TotalSeconds -lt $refresh) {
         return $script:customUso[$id]
     }
@@ -1155,7 +1231,7 @@ function Refrescar-Ayuda {
         '· Claude: lee el cache de uso que la CLI deja en ~/.claude.json. No se refresca solo: corre /usage en Claude de vez en cuando.'
         '· Codex: suma los tokens del dia desde las sesiones locales (~/.codex/sessions/<fecha>/*.jsonl) y, si el log los trae, muestra los limites de 5 hs / semanal.'
         '· OpenCode: corre `opencode stats --days 0 --json` cada 60 segundos.'
-        '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Deben devolver: sessions, tokens {input, output, cache}, cost.'
+        '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Pueden devolver (todo opcional): sessions, prompts, steps, tokens {input, output, cache}, cost.'
         '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, y el switch "Modo claro" para cambiar el tema; todo se guarda en config.json. Al final del popup esta la leyenda del autor.'
         '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.'
     )
