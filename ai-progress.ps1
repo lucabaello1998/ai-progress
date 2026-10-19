@@ -20,8 +20,9 @@
 #   5) OTROS: proveedores propios definidos en config.json -> customProviders (un comando CLI
 #      o un archivo JSON que devuelva metrics con forma {sessions, prompts, steps, tokens, cost}).
 #
-# MENU (chips arriba del todo): prende/apaga cada seccion. La eleccion se guarda en config.json
-# (sections). El boton "?" muestra la explicacion de como funciona todo, adentro del widget.
+# MENU (hamburguesa arriba a la derecha): switchs para prender/apagar cada seccion; la eleccion
+# se guarda en config.json (sections). Al final del menu va la leyenda "Hecho por Luca Baello".
+# El boton "?" muestra la explicacion de como funciona todo, adentro del widget.
 #
 # No habla con ninguna API ni manda nada: solo lee archivos locales y corre CLIs ya instalados.
 # Cerrar la ventana NO cancela nada - es un monitor.
@@ -108,6 +109,9 @@ $script:usoCodex = $null
 $script:usoCodexLeidoEn = $null
 $script:customUso = @{}
 $script:customLeido = @{}
+$script:menuAbierto = $false
+# Para la captura del README: AI_PROGRESS_CAPTURE_MENU=1 arranca con el menu desplegado.
+if ($env:AI_PROGRESS_CAPTURE_MENU) { $script:menuAbierto = $true }
 
 function New-Brush($color) { New-Object System.Windows.Media.SolidColorBrush $color }
 
@@ -297,14 +301,17 @@ $window.Content = $borderRaiz
 $panelRaiz = New-Object System.Windows.Controls.StackPanel
 $scroll.Content = $panelRaiz
 
-# --- Header (arrastrable + boton de ayuda + boton de cerrar) ---
+# --- Header (arrastrable: hamburguesa + ayuda + cerrar, todo centrado verticalmente) ---
 $header = New-Object System.Windows.Controls.Grid
 $colTitulo = New-Object System.Windows.Controls.ColumnDefinition
+$colMenu = New-Object System.Windows.Controls.ColumnDefinition
+$colMenu.Width = 'Auto'
 $colAyuda = New-Object System.Windows.Controls.ColumnDefinition
 $colAyuda.Width = 'Auto'
 $colCerrar = New-Object System.Windows.Controls.ColumnDefinition
 $colCerrar.Width = 'Auto'
 $header.ColumnDefinitions.Add($colTitulo)
+$header.ColumnDefinitions.Add($colMenu)
 $header.ColumnDefinitions.Add($colAyuda)
 $header.ColumnDefinitions.Add($colCerrar)
 
@@ -313,24 +320,51 @@ $tituloVentana.Text = "Progreso IA"
 $tituloVentana.Foreground = New-Brush $colorTexto
 $tituloVentana.FontWeight = 'Bold'
 $tituloVentana.FontSize = 13
+$tituloVentana.VerticalAlignment = 'Center'
 [System.Windows.Controls.Grid]::SetColumn($tituloVentana, 0)
 $header.Children.Add($tituloVentana) | Out-Null
+
+# Menu hamburguesa: 3 lineas dibujadas (no depende de glifos de la fuente).
+$botonMenu = New-Object System.Windows.Controls.Border
+$botonMenu.Background = [System.Windows.Media.Brushes]::Transparent
+$botonMenu.Cursor = 'Hand'
+$botonMenu.Margin = '12,0,0,0'
+$botonMenu.Padding = '2'
+$botonMenu.VerticalAlignment = 'Center'
+$lineasHamburguesa = New-Object System.Windows.Controls.StackPanel
+foreach ($i in 1..3) {
+    $lineaMenu = New-Object System.Windows.Controls.Border
+    $lineaMenu.Width = 14
+    $lineaMenu.Height = 2
+    $lineaMenu.Background = New-Brush $colorTextoSecundario
+    if ($i -lt 3) { $lineaMenu.Margin = '0,0,0,3' }
+    $lineasHamburguesa.Children.Add($lineaMenu) | Out-Null
+}
+$botonMenu.Child = $lineasHamburguesa
+[System.Windows.Controls.Grid]::SetColumn($botonMenu, 1)
+$botonMenu.Add_MouseLeftButtonDown({
+    param($s, $e)
+    $e.Handled = $true
+    $script:menuAbierto = -not $script:menuAbierto
+    Actualizar-Menu
+})
+$header.Children.Add($botonMenu) | Out-Null
 
 $botonAyuda = New-Object System.Windows.Controls.TextBlock
 $botonAyuda.Text = "?"
 $botonAyuda.FontSize = 13
 $botonAyuda.FontWeight = 'Bold'
 $botonAyuda.Cursor = 'Hand'
-$botonAyuda.Margin = '10,0,0,0'
+$botonAyuda.Margin = '12,0,0,0'
+$botonAyuda.VerticalAlignment = 'Center'
 if ($config.showHelp) { $botonAyuda.Foreground = New-Brush $colorPrimario } else { $botonAyuda.Foreground = New-Brush $colorTextoSecundario }
-[System.Windows.Controls.Grid]::SetColumn($botonAyuda, 1)
+[System.Windows.Controls.Grid]::SetColumn($botonAyuda, 2)
 $botonAyuda.Add_MouseLeftButtonDown({
     param($s, $e)
     $e.Handled = $true
     $config.showHelp = -not [bool]$config.showHelp
     Guardar-Config
     if ($config.showHelp) { $s.Foreground = New-Brush $colorPrimario } else { $s.Foreground = New-Brush $colorTextoSecundario }
-    Refrescar-Ayuda
     Refrescar-Todo
 })
 $header.Children.Add($botonAyuda) | Out-Null
@@ -338,10 +372,11 @@ $header.Children.Add($botonAyuda) | Out-Null
 $cerrar = New-Object System.Windows.Controls.TextBlock
 $cerrar.Text = [char]0x00D7
 $cerrar.Foreground = New-Brush $colorTextoSecundario
-$cerrar.FontSize = 16
+$cerrar.FontSize = 15
 $cerrar.Cursor = 'Hand'
-$cerrar.Margin = '10,0,0,0'
-[System.Windows.Controls.Grid]::SetColumn($cerrar, 2)
+$cerrar.Margin = '12,0,0,0'
+$cerrar.VerticalAlignment = 'Center'
+[System.Windows.Controls.Grid]::SetColumn($cerrar, 3)
 $cerrar.Add_MouseLeftButtonDown({
     param($s, $e)
     $e.Handled = $true
@@ -356,10 +391,11 @@ $header.Add_MouseLeftButtonDown({
 })
 $panelRaiz.Children.Add($header) | Out-Null
 
-# --- Menu de secciones (chips que prenden/apagan cada bloque) ---
-$panelMenu = New-Object System.Windows.Controls.WrapPanel
-$panelMenu.Margin = '0,8,0,2'
-$panelRaiz.Children.Add($panelMenu) | Out-Null
+# --- Panel desplegable del menu (switchs + leyenda; lo arma Actualizar-Menu) ---
+$panelMenuDesplegable = New-Object System.Windows.Controls.StackPanel
+$panelMenuDesplegable.Margin = '0,10,0,0'
+$panelMenuDesplegable.Visibility = 'Collapsed'
+$panelRaiz.Children.Add($panelMenuDesplegable) | Out-Null
 
 # --- Secciones: cada contenedor arranca con su separador, asi al ocultarlo desaparece todo ---
 function New-ContenedorSeccion {
@@ -1016,7 +1052,7 @@ function Refrescar-Ayuda {
         '· Codex: suma los tokens del dia desde las sesiones locales (~/.codex/sessions/<fecha>/*.jsonl) y, si el log los trae, muestra los limites de 5 hs / semanal.'
         '· OpenCode: corre `opencode stats --days 0 --json` cada 60 segundos.'
         '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Deben devolver: sessions, tokens {input, output, cache}, cost.'
-        '· El menu de chips de arriba prende y apaga cada seccion; la eleccion se guarda en config.json.'
+        '· El menu hamburguesa de arriba (a la derecha) prende y apaga cada seccion con switchs; la eleccion se guarda en config.json. Al final del menu esta la leyenda del autor.'
         '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.'
     )
     foreach ($l in $lineas) {
@@ -1024,7 +1060,7 @@ function Refrescar-Ayuda {
     }
 }
 
-# ================= Menu de secciones =================
+# ================= Menu de secciones (hamburguesa) =================
 $seccionesMenu = @(
     @{ id = 'tasks'; nombre = 'Tareas' },
     @{ id = 'claude'; nombre = 'Claude' },
@@ -1037,9 +1073,9 @@ foreach ($prov in $config.customProviders) {
     }
 }
 
-# El handler lee el id desde el Tag del chip: un scriptblock por chip capturaria mal la
+# El handler lee el id desde el Tag de la fila: un scriptblock por fila capturaria mal la
 # variable del loop (en PowerShell los closures comparten la variable del foreach).
-$chipHandler = {
+$filaMenuHandler = {
     param($s, $e)
     $sid = [string]$s.Tag
     $config.sections[$sid] = -not [bool]$config.sections[$sid]
@@ -1048,38 +1084,79 @@ $chipHandler = {
     Refrescar-Todo
 }
 
-function Construir-Menu {
-    $panelMenu.Children.Clear()
-    foreach ($sec in $seccionesMenu) {
-        $chip = New-Object System.Windows.Controls.Border
-        $chip.Tag = $sec.id
-        $chip.CornerRadius = 8
-        $chip.BorderThickness = 1
-        $chip.Padding = '6,2,6,2'
-        $chip.Margin = '0,0,6,4'
-        $chip.Cursor = 'Hand'
-        $txt = New-Object System.Windows.Controls.TextBlock
-        $txt.FontSize = 10
-        $txt.Text = $sec.nombre
-        $chip.Child = $txt
-        $chip.Add_MouseLeftButtonDown($chipHandler)
-        $panelMenu.Children.Add($chip) | Out-Null
-    }
-    Actualizar-Menu
+function New-FilaMenu($sec) {
+    # Fila del menu: nombre + switch on/off; toda la fila es clickeable.
+    $fila = New-Object System.Windows.Controls.Grid
+    $fila.Tag = $sec.id
+    $fila.Cursor = 'Hand'
+    $fila.Margin = '0,4,0,4'
+    $colNombre = New-Object System.Windows.Controls.ColumnDefinition
+    $colSwitch = New-Object System.Windows.Controls.ColumnDefinition
+    $colSwitch.Width = 'Auto'
+    $fila.ColumnDefinitions.Add($colNombre)
+    $fila.ColumnDefinitions.Add($colSwitch)
+
+    $activo = [bool]$config.sections[[string]$sec.id]
+
+    $nombre = New-Object System.Windows.Controls.TextBlock
+    $nombre.Text = $sec.nombre
+    $nombre.FontSize = 11
+    $nombre.VerticalAlignment = 'Center'
+    if ($activo) { $nombre.Foreground = New-Brush $colorTexto } else { $nombre.Foreground = New-Brush $colorTextoSecundario }
+    [System.Windows.Controls.Grid]::SetColumn($nombre, 0)
+    $fila.Children.Add($nombre) | Out-Null
+
+    $riel = New-Object System.Windows.Controls.Border
+    $riel.Width = 30
+    $riel.Height = 16
+    $riel.CornerRadius = 8
+    if ($activo) { $riel.Background = New-Brush $colorPrimario } else { $riel.Background = New-Brush ([System.Windows.Media.Color]::FromArgb(255, 70, 78, 90)) }
+    $riel.VerticalAlignment = 'Center'
+    [System.Windows.Controls.Grid]::SetColumn($riel, 1)
+
+    $palanca = New-Object System.Windows.Controls.Border
+    $palanca.Width = 12
+    $palanca.Height = 12
+    $palanca.CornerRadius = 6
+    $palanca.Background = New-Brush ([System.Windows.Media.Color]::FromArgb(255, 240, 240, 240))
+    $palanca.Margin = '2'
+    if ($activo) { $palanca.HorizontalAlignment = 'Right' } else { $palanca.HorizontalAlignment = 'Left' }
+    $riel.Child = $palanca
+    $fila.Children.Add($riel) | Out-Null
+
+    $fila.Add_MouseLeftButtonDown($filaMenuHandler)
+    return $fila
 }
 
 function Actualizar-Menu {
-    foreach ($chip in $panelMenu.Children) {
-        $activo = [bool]$config.sections[[string]$chip.Tag]
-        if ($activo) {
-            $chip.BorderBrush = New-Brush $colorPrimario
-            $chip.Background = New-Brush ([System.Windows.Media.Color]::FromArgb(40, 249, 115, 22))
-            $chip.Child.Foreground = New-Brush $colorTexto
-        } else {
-            $chip.BorderBrush = New-Brush $colorBorde
-            $chip.Background = [System.Windows.Media.Brushes]::Transparent
-            $chip.Child.Foreground = New-Brush $colorTextoSecundario
+    # Reconstruye el panel desplegable (switchs + leyenda) y sincroniza la hamburguesa.
+    $panelMenuDesplegable.Children.Clear()
+    $panelMenuDesplegable.Visibility = if ($script:menuAbierto) { 'Visible' } else { 'Collapsed' }
+
+    if ($script:menuAbierto) {
+        foreach ($sec in $seccionesMenu) {
+            $panelMenuDesplegable.Children.Add((New-FilaMenu $sec)) | Out-Null
         }
+        $panelMenuDesplegable.Children.Add((New-Separador)) | Out-Null
+        $leyenda = New-Object System.Windows.Controls.TextBlock
+        $leyenda.Text = "Hecho por Luca Baello"
+        $leyenda.FontSize = 10
+        $leyenda.Foreground = New-Brush $colorTextoSecundario
+        $leyenda.HorizontalAlignment = 'Center'
+        $leyenda.Margin = '0,0,0,1'
+        $panelMenuDesplegable.Children.Add($leyenda) | Out-Null
+        $repo = New-Object System.Windows.Controls.TextBlock
+        $repo.Text = "github.com/lucabaello1998/ai-progress"
+        $repo.FontSize = 9
+        $repo.Foreground = New-Brush ([System.Windows.Media.Color]::FromArgb(255, 110, 118, 130))
+        $repo.HorizontalAlignment = 'Center'
+        $panelMenuDesplegable.Children.Add($repo) | Out-Null
+    }
+
+    if ($script:menuAbierto) {
+        foreach ($lineaMenu in $lineasHamburguesa.Children) { $lineaMenu.Background = New-Brush $colorPrimario }
+    } else {
+        foreach ($lineaMenu in $lineasHamburguesa.Children) { $lineaMenu.Background = New-Brush $colorTextoSecundario }
     }
 }
 
@@ -1093,7 +1170,7 @@ function Refrescar-Todo {
     Refrescar-Ayuda
 }
 
-Construir-Menu
+Actualizar-Menu
 Refrescar-Todo
 
 $timer = New-Object System.Windows.Threading.DispatcherTimer

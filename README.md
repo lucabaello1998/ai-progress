@@ -14,10 +14,15 @@ Widget flotante para Windows que muestra, siempre visible arriba a la derecha:
 5. **Otros modelos** — proveedores propios definidos en `config.json` (un comando CLI o un
    archivo JSON con métricas).
 
-El **menú de chips** de arriba prende/apaga cada sección (la elección se guarda en
-`config.json`) y el botón **?** muestra la explicación de cómo funciona, dentro del widget.
+El **menú hamburguesa** (arriba a la derecha) prende/apaga cada sección con *switchs* — la
+elección se guarda en `config.json` —, el botón **?** muestra la explicación de cómo funciona
+dentro del propio widget, y al pie del menú está la leyenda del autor.
 
 ![screenshot](docs/screenshot.png)
+
+Menú abierto (switchs por sección + leyenda):
+
+![menú abierto](docs/screenshot-menu.png)
 
 Con la ayuda abierta (botón **?**):
 
@@ -75,7 +80,7 @@ lanzar tareas largas; por ejemplo:
 
 Copiá [`config.example.json`](config.example.json) a `config.json` y editá lo que necesites.
 Todo es opcional (el widget arranca con defaults sensatos). El archivo está gitignored, y el
-propio widget lo reescribe cuando usás el menú de chips o el botón **?**.
+propio widget lo reescribe cuando usás el menú hamburguesa o el botón **?**.
 
 ```json
 {
