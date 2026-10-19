@@ -20,8 +20,9 @@
 #   5) OTROS: proveedores propios definidos en config.json -> customProviders (un comando CLI
 #      o un archivo JSON que devuelva metrics con forma {sessions, prompts, steps, tokens, cost}).
 #
-# MENU (hamburguesa arriba a la derecha): switchs para prender/apagar cada seccion; la eleccion
-# se guarda en config.json (sections). Al final del menu va la leyenda "Hecho por Luca Baello".
+# MENU (hamburguesa arriba a la derecha): abre un popup flotante -fondo mas oscuro, no empuja
+# el contenido- con switchs para prender/apagar cada seccion; la eleccion se guarda en
+# config.json (sections). Al final del popup va la leyenda "Hecho por Luca Baello".
 # El boton "?" muestra la explicacion de como funciona todo, adentro del widget.
 #
 # No habla con ninguna API ni manda nada: solo lee archivos locales y corre CLIs ya instalados.
@@ -109,9 +110,6 @@ $script:usoCodex = $null
 $script:usoCodexLeidoEn = $null
 $script:customUso = @{}
 $script:customLeido = @{}
-$script:menuAbierto = $false
-# Para la captura del README: AI_PROGRESS_CAPTURE_MENU=1 arranca con el menu desplegado.
-if ($env:AI_PROGRESS_CAPTURE_MENU) { $script:menuAbierto = $true }
 
 function New-Brush($color) { New-Object System.Windows.Media.SolidColorBrush $color }
 
@@ -345,8 +343,12 @@ $botonMenu.Child = $lineasHamburguesa
 $botonMenu.Add_MouseLeftButtonDown({
     param($s, $e)
     $e.Handled = $true
-    $script:menuAbierto = -not $script:menuAbierto
+    if ($popup.IsOpen) { $popup.IsOpen = $false; return }
     Actualizar-Menu
+    # Alineado a la derecha del boton (el marco tiene 12px de margen para la sombra).
+    $popup.HorizontalOffset = [double]$botonMenu.ActualWidth - ($marcoPopup.Width + 24)
+    $popup.VerticalOffset = -6
+    $popup.IsOpen = $true
 })
 $header.Children.Add($botonMenu) | Out-Null
 
@@ -391,11 +393,38 @@ $header.Add_MouseLeftButtonDown({
 })
 $panelRaiz.Children.Add($header) | Out-Null
 
-# --- Panel desplegable del menu (switchs + leyenda; lo arma Actualizar-Menu) ---
-$panelMenuDesplegable = New-Object System.Windows.Controls.StackPanel
-$panelMenuDesplegable.Margin = '0,10,0,0'
-$panelMenuDesplegable.Visibility = 'Collapsed'
-$panelRaiz.Children.Add($panelMenuDesplegable) | Out-Null
+# --- Popup del menu (flota sobre el contenido; fondo mas oscuro para distinguir las opciones) ---
+$popup = New-Object System.Windows.Controls.Primitives.Popup
+$popup.PlacementTarget = $botonMenu
+$popup.Placement = 'Bottom'
+$popup.StaysOpen = $false
+$popup.AllowsTransparency = $true
+
+$marcoPopup = New-Object System.Windows.Controls.Border
+$marcoPopup.Width = 212
+$marcoPopup.Margin = '12'
+$marcoPopup.CornerRadius = 10
+$marcoPopup.Background = New-Brush ([System.Windows.Media.Color]::FromRgb(0x11, 0x15, 0x1C))
+$marcoPopup.BorderBrush = New-Brush ([System.Windows.Media.Color]::FromRgb(0x3A, 0x42, 0x50))
+$marcoPopup.BorderThickness = 1
+$marcoPopup.Padding = '12,8,12,10'
+$sombraPopup = New-Object System.Windows.Media.Effects.DropShadowEffect
+$sombraPopup.BlurRadius = 12
+$sombraPopup.ShadowDepth = 0
+$sombraPopup.Opacity = 0.6
+$sombraPopup.Color = [System.Windows.Media.Colors]::Black
+$marcoPopup.Effect = $sombraPopup
+
+$panelPopup = New-Object System.Windows.Controls.StackPanel
+$marcoPopup.Child = $panelPopup
+$popup.Child = $marcoPopup
+
+$popup.Add_Opened({
+    foreach ($lineaMenu in $lineasHamburguesa.Children) { $lineaMenu.Background = New-Brush $colorPrimario }
+})
+$popup.Add_Closed({
+    foreach ($lineaMenu in $lineasHamburguesa.Children) { $lineaMenu.Background = New-Brush $colorTextoSecundario }
+})
 
 # --- Secciones: cada contenedor arranca con su separador, asi al ocultarlo desaparece todo ---
 function New-ContenedorSeccion {
@@ -1052,7 +1081,7 @@ function Refrescar-Ayuda {
         '· Codex: suma los tokens del dia desde las sesiones locales (~/.codex/sessions/<fecha>/*.jsonl) y, si el log los trae, muestra los limites de 5 hs / semanal.'
         '· OpenCode: corre `opencode stats --days 0 --json` cada 60 segundos.'
         '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Deben devolver: sessions, tokens {input, output, cache}, cost.'
-        '· El menu hamburguesa de arriba (a la derecha) prende y apaga cada seccion con switchs; la eleccion se guarda en config.json. Al final del menu esta la leyenda del autor.'
+        '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion; la eleccion se guarda en config.json. Al final del popup esta la leyenda del autor.'
         '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.'
     )
     foreach ($l in $lineas) {
@@ -1129,35 +1158,26 @@ function New-FilaMenu($sec) {
 }
 
 function Actualizar-Menu {
-    # Reconstruye el panel desplegable (switchs + leyenda) y sincroniza la hamburguesa.
-    $panelMenuDesplegable.Children.Clear()
-    $panelMenuDesplegable.Visibility = if ($script:menuAbierto) { 'Visible' } else { 'Collapsed' }
-
-    if ($script:menuAbierto) {
-        foreach ($sec in $seccionesMenu) {
-            $panelMenuDesplegable.Children.Add((New-FilaMenu $sec)) | Out-Null
-        }
-        $panelMenuDesplegable.Children.Add((New-Separador)) | Out-Null
-        $leyenda = New-Object System.Windows.Controls.TextBlock
-        $leyenda.Text = "Hecho por Luca Baello"
-        $leyenda.FontSize = 10
-        $leyenda.Foreground = New-Brush $colorTextoSecundario
-        $leyenda.HorizontalAlignment = 'Center'
-        $leyenda.Margin = '0,0,0,1'
-        $panelMenuDesplegable.Children.Add($leyenda) | Out-Null
-        $repo = New-Object System.Windows.Controls.TextBlock
-        $repo.Text = "github.com/lucabaello1998/ai-progress"
-        $repo.FontSize = 9
-        $repo.Foreground = New-Brush ([System.Windows.Media.Color]::FromArgb(255, 110, 118, 130))
-        $repo.HorizontalAlignment = 'Center'
-        $panelMenuDesplegable.Children.Add($repo) | Out-Null
+    # Reconstruye el contenido del popup (switchs + leyenda). El color de la hamburguesa lo
+    # manejan los eventos Opened/Closed del popup.
+    $panelPopup.Children.Clear()
+    foreach ($sec in $seccionesMenu) {
+        $panelPopup.Children.Add((New-FilaMenu $sec)) | Out-Null
     }
-
-    if ($script:menuAbierto) {
-        foreach ($lineaMenu in $lineasHamburguesa.Children) { $lineaMenu.Background = New-Brush $colorPrimario }
-    } else {
-        foreach ($lineaMenu in $lineasHamburguesa.Children) { $lineaMenu.Background = New-Brush $colorTextoSecundario }
-    }
+    $panelPopup.Children.Add((New-Separador)) | Out-Null
+    $leyenda = New-Object System.Windows.Controls.TextBlock
+    $leyenda.Text = "Hecho por Luca Baello"
+    $leyenda.FontSize = 10
+    $leyenda.Foreground = New-Brush $colorTextoSecundario
+    $leyenda.HorizontalAlignment = 'Center'
+    $leyenda.Margin = '0,0,0,1'
+    $panelPopup.Children.Add($leyenda) | Out-Null
+    $repo = New-Object System.Windows.Controls.TextBlock
+    $repo.Text = "github.com/lucabaello1998/ai-progress"
+    $repo.FontSize = 9
+    $repo.Foreground = New-Brush ([System.Windows.Media.Color]::FromArgb(255, 110, 118, 130))
+    $repo.HorizontalAlignment = 'Center'
+    $panelPopup.Children.Add($repo) | Out-Null
 }
 
 # ================= Refresco total =================
@@ -1179,6 +1199,20 @@ $timer.Add_Tick({
     Refrescar-Todo
 })
 $timer.Start()
+
+# Captura del README: AI_PROGRESS_CAPTURE_MENU=1 abre el popup del menu a los 0.8s.
+if ($env:AI_PROGRESS_CAPTURE_MENU) {
+    $abrirMenuCaptura = New-Object System.Windows.Threading.DispatcherTimer
+    $abrirMenuCaptura.Interval = [TimeSpan]::FromMilliseconds(800)
+    $abrirMenuCaptura.Add_Tick({
+        $abrirMenuCaptura.Stop()
+        Actualizar-Menu
+        $popup.HorizontalOffset = [double]$botonMenu.ActualWidth - ($marcoPopup.Width + 24)
+        $popup.VerticalOffset = -6
+        $popup.IsOpen = $true
+    })
+    $abrirMenuCaptura.Start()
+}
 
 $window.Add_Closed({
     $timer.Stop()

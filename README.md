@@ -14,13 +14,14 @@ Widget flotante para Windows que muestra, siempre visible arriba a la derecha:
 5. **Otros modelos** — proveedores propios definidos en `config.json` (un comando CLI o un
    archivo JSON con métricas).
 
-El **menú hamburguesa** (arriba a la derecha) prende/apaga cada sección con *switchs* — la
-elección se guarda en `config.json` —, el botón **?** muestra la explicación de cómo funciona
-dentro del propio widget, y al pie del menú está la leyenda del autor.
+El **menú hamburguesa** (arriba a la derecha) abre un **popup flotante** — fondo más oscuro, no
+empuja el contenido — con *switchs* para prender/apagar cada sección; la elección se guarda en
+`config.json`. El botón **?** muestra la explicación de cómo funciona dentro del propio widget, y
+al pie del popup está la leyenda del autor.
 
 ![screenshot](docs/screenshot.png)
 
-Menú abierto (switchs por sección + leyenda):
+Popup del menú (switchs por sección + leyenda):
 
 ![menú abierto](docs/screenshot-menu.png)
 
