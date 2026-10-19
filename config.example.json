@@ -2,6 +2,7 @@
   "statusPaths": ["status.json"],
   "sections": { "tasks": true, "claude": true, "codex": true, "opencode": true },
   "showHelp": false,
+  "theme": "dark",
   "opencodeCliPath": null,
   "opencodeRefreshSeconds": 60,
   "codexRefreshSeconds": 60,

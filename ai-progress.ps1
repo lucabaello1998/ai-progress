@@ -21,8 +21,9 @@
 #      o un archivo JSON que devuelva metrics con forma {sessions, prompts, steps, tokens, cost}).
 #
 # MENU (hamburguesa arriba a la derecha): abre un popup flotante -fondo mas oscuro, no empuja
-# el contenido- con switchs para prender/apagar cada seccion; la eleccion se guarda en
-# config.json (sections). Al final del popup va la leyenda "Hecho por Luca Baello".
+# el contenido- con switchs para prender/apagar cada seccion y el switch "Modo claro" (tema
+# dark/light). Las elecciones se guardan en config.json (sections / theme). Al final del popup
+# va la leyenda "Hecho por Luca Baello".
 # El boton "?" muestra la explicacion de como funciona todo, adentro del widget.
 #
 # No habla con ninguna API ni manda nada: solo lee archivos locales y corre CLIs ya instalados.
@@ -33,6 +34,7 @@
 #     "statusPaths": ["status.json"],
 #     "sections": { "tasks": true, "claude": true, "codex": true, "opencode": true },
 #     "showHelp": false,
+#     "theme": "dark",
 #     "opencodeCliPath": null,
 #     "opencodeRefreshSeconds": 60,
 #     "codexRefreshSeconds": 60,
@@ -55,6 +57,7 @@ $config = @{
     codexRefreshSeconds    = 60
     sections               = @{ tasks = $true; claude = $true; codex = $true; opencode = $true }
     showHelp               = $false
+    theme                  = 'dark'
     customProviders        = @()
 }
 $configPath = Join-Path $scriptDir 'config.json'
@@ -74,6 +77,7 @@ if (Test-Path $configPath) {
             foreach ($clave in @($cfg['sections'].Keys)) { $config.sections[[string]$clave] = [bool]$cfg['sections'][$clave] }
         }
         if ($null -ne $cfg['showHelp']) { $config.showHelp = [bool]$cfg['showHelp'] }
+        if (@('dark', 'light') -contains [string]$cfg['theme']) { $config.theme = [string]$cfg['theme'] }
         if ($cfg['customProviders']) {
             $config.customProviders = @($cfg['customProviders'] | Where-Object { $_['id'] -and ($_['command'] -or $_['file']) })
         }
@@ -84,20 +88,9 @@ foreach ($prov in $config.customProviders) {
     if ($null -eq $config.sections[$cid]) { $config.sections[$cid] = $true }
 }
 
-# ---------- Colores (paleta FletAR, pensada para fondo oscuro semitransparente) ----------
-$colorFondo = [System.Windows.Media.Color]::FromArgb(235, 30, 37, 48)      # #1E2530 semitransparente
-# Para el screenshot del README el fondo va opaco (si no, se transparenta el escritorio).
-if ($env:AI_PROGRESS_CAPTURE) { $colorFondo = [System.Windows.Media.Color]::FromArgb(255, 30, 37, 48) }
-$colorBorde = [System.Windows.Media.Color]::FromArgb(255, 90, 98, 110)
-$colorPrimario = [System.Windows.Media.Color]::FromRgb(0xF9, 0x73, 0x16)  # naranja FletAR
-$colorTexto = [System.Windows.Media.Colors]::WhiteSmoke
-$colorTextoSecundario = [System.Windows.Media.Color]::FromRgb(0x9C, 0xA3, 0xAF)
-$colorOk = [System.Windows.Media.Color]::FromRgb(0x22, 0xC5, 0x5E)
-$colorWarning = [System.Windows.Media.Color]::FromRgb(0xF5, 0x9E, 0x0B)
-$colorDanger = [System.Windows.Media.Color]::FromRgb(0xEF, 0x44, 0x44)
-$colorOpenCode = [System.Windows.Media.Color]::FromRgb(0x38, 0xBD, 0xF8)  # cyan para OpenCode
-$colorCodex = [System.Windows.Media.Color]::FromRgb(0x10, 0xA3, 0x7F)     # verde OpenAI para Codex
-$colorCustom = [System.Windows.Media.Color]::FromRgb(0xA7, 0x8B, 0xFA)    # lavanda para proveedores propios
+# ---------- Colores ----------
+# La paleta la arma Aplicar-Tema (mas abajo), segun config.theme ('dark' | 'light').
+# El switch "Modo claro" del popup llama a Repintar-Tema, que la re-aplica en caliente.
 
 # Rutas y estado interno de cada fuente.
 $claudeConfigPath = Join-Path $env:USERPROFILE '.claude.json'
@@ -260,11 +253,79 @@ function Guardar-Config {
             codexRefreshSeconds    = $config.codexRefreshSeconds
             sections               = $config.sections
             showHelp               = [bool]$config.showHelp
+            theme                  = [string]$config.theme
             customProviders        = @($config.customProviders)
         }
         $obj | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding UTF8
     } catch { }
 }
+
+# ---------- Tema (dark | light) ----------
+function Aplicar-Tema {
+    # Arma la paleta global segun config.theme. Lo que se dibuja despues (y lo que re-arma
+    # Refrescar-Todo) lee estas variables, asi que cambiar de tema es re-llamar esto.
+    $script:colorPrimario = [System.Windows.Media.Color]::FromRgb(0xF9, 0x73, 0x16)   # naranja FletAR
+    $alphaFondo = 235
+    # Para el screenshot del README el fondo va opaco (si no, se transparenta el escritorio).
+    if ($env:AI_PROGRESS_CAPTURE) { $alphaFondo = 255 }
+
+    if ($config.theme -eq 'light') {
+        $script:colorFondo = [System.Windows.Media.Color]::FromArgb($alphaFondo, 246, 247, 249)  # #F6F7F9
+        $script:colorBorde = [System.Windows.Media.Color]::FromRgb(203, 210, 220)
+        $script:colorTexto = [System.Windows.Media.Color]::FromRgb(31, 41, 55)
+        $script:colorTextoSecundario = [System.Windows.Media.Color]::FromRgb(107, 114, 128)
+        $script:colorOk = [System.Windows.Media.Color]::FromRgb(21, 128, 61)
+        $script:colorWarning = [System.Windows.Media.Color]::FromRgb(180, 83, 9)
+        $script:colorDanger = [System.Windows.Media.Color]::FromRgb(185, 28, 28)
+        $script:colorOpenCode = [System.Windows.Media.Color]::FromRgb(2, 132, 199)
+        $script:colorCodex = [System.Windows.Media.Color]::FromRgb(13, 138, 106)
+        $script:colorCustom = [System.Windows.Media.Color]::FromRgb(124, 58, 237)
+        $script:colorBarraFondo = [System.Windows.Media.Color]::FromArgb(40, 0, 0, 0)
+        $script:colorPopupFondo = [System.Windows.Media.Color]::FromRgb(255, 255, 255)
+        $script:colorPopupBorde = [System.Windows.Media.Color]::FromRgb(209, 213, 219)
+        $script:colorRielOff = [System.Windows.Media.Color]::FromRgb(203, 213, 225)
+        $script:colorPalanca = [System.Windows.Media.Color]::FromRgb(255, 255, 255)
+        $script:colorDim = [System.Windows.Media.Color]::FromRgb(148, 155, 165)
+        $script:opacidadSombra = 0.25
+    } else {
+        $script:colorFondo = [System.Windows.Media.Color]::FromArgb($alphaFondo, 30, 37, 48)     # #1E2530
+        $script:colorBorde = [System.Windows.Media.Color]::FromRgb(90, 98, 110)
+        $script:colorTexto = [System.Windows.Media.Colors]::WhiteSmoke
+        $script:colorTextoSecundario = [System.Windows.Media.Color]::FromRgb(0x9C, 0xA3, 0xAF)
+        $script:colorOk = [System.Windows.Media.Color]::FromRgb(0x22, 0xC5, 0x5E)
+        $script:colorWarning = [System.Windows.Media.Color]::FromRgb(0xF5, 0x9E, 0x0B)
+        $script:colorDanger = [System.Windows.Media.Color]::FromRgb(0xEF, 0x44, 0x44)
+        $script:colorOpenCode = [System.Windows.Media.Color]::FromRgb(0x38, 0xBD, 0xF8)
+        $script:colorCodex = [System.Windows.Media.Color]::FromRgb(0x10, 0xA3, 0x7F)
+        $script:colorCustom = [System.Windows.Media.Color]::FromRgb(0xA7, 0x8B, 0xFA)
+        $script:colorBarraFondo = [System.Windows.Media.Color]::FromArgb(80, 255, 255, 255)
+        $script:colorPopupFondo = [System.Windows.Media.Color]::FromRgb(0x11, 0x15, 0x1C)
+        $script:colorPopupBorde = [System.Windows.Media.Color]::FromRgb(0x3A, 0x42, 0x50)
+        $script:colorRielOff = [System.Windows.Media.Color]::FromRgb(70, 78, 90)
+        $script:colorPalanca = [System.Windows.Media.Color]::FromRgb(240, 240, 240)
+        $script:colorDim = [System.Windows.Media.Color]::FromRgb(110, 118, 130)
+        $script:opacidadSombra = 0.6
+    }
+}
+
+function Repintar-Tema {
+    # Cambio de tema en caliente: repinta el chrome fijo (ventana, header, popup). El contenido
+    # de las secciones lo redibuja quien llama al handler (Refrescar-Todo).
+    Aplicar-Tema
+    $borderRaiz.Background = New-Brush $colorFondo
+    $borderRaiz.BorderBrush = New-Brush $colorBorde
+    $tituloVentana.Foreground = New-Brush $colorTexto
+    if ($config.showHelp) { $botonAyuda.Foreground = New-Brush $colorPrimario } else { $botonAyuda.Foreground = New-Brush $colorTextoSecundario }
+    $cerrar.Foreground = New-Brush $colorTextoSecundario
+    $marcoPopup.Background = New-Brush $colorPopupFondo
+    $marcoPopup.BorderBrush = New-Brush $colorPopupBorde
+    $sombraPopup.Opacity = $opacidadSombra
+    foreach ($lineaMenu in $lineasHamburguesa.Children) {
+        if ($popup.IsOpen) { $lineaMenu.Background = New-Brush $colorPrimario } else { $lineaMenu.Background = New-Brush $colorTextoSecundario }
+    }
+}
+
+Aplicar-Tema
 
 # ================= Ventana =================
 $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
@@ -417,14 +478,14 @@ $marcoPopup = New-Object System.Windows.Controls.Border
 $marcoPopup.Width = 212
 $marcoPopup.Margin = '12'
 $marcoPopup.CornerRadius = 10
-$marcoPopup.Background = New-Brush ([System.Windows.Media.Color]::FromRgb(0x11, 0x15, 0x1C))
-$marcoPopup.BorderBrush = New-Brush ([System.Windows.Media.Color]::FromRgb(0x3A, 0x42, 0x50))
+$marcoPopup.Background = New-Brush $colorPopupFondo
+$marcoPopup.BorderBrush = New-Brush $colorPopupBorde
 $marcoPopup.BorderThickness = 1
 $marcoPopup.Padding = '12,8,12,10'
 $sombraPopup = New-Object System.Windows.Media.Effects.DropShadowEffect
 $sombraPopup.BlurRadius = 12
 $sombraPopup.ShadowDepth = 0
-$sombraPopup.Opacity = 0.6
+$sombraPopup.Opacity = $opacidadSombra
 $sombraPopup.Color = [System.Windows.Media.Colors]::Black
 $marcoPopup.Effect = $sombraPopup
 
@@ -610,7 +671,7 @@ function Refrescar-Tareas {
         $barra.Height = 8
         $barra.Margin = '0,5,0,4'
         $barra.Foreground = New-Brush $colorPrimario
-        $barra.Background = New-Brush ([System.Windows.Media.Color]::FromArgb(80, 255, 255, 255))
+        $barra.Background = New-Brush $colorBarraFondo
         $barra.BorderThickness = 0
 
         $estado = [string]$tarea.status
@@ -764,7 +825,7 @@ function New-FilaBarra($etiqueta, [int]$porcentaje, $reset, $color) {
     $barra.Maximum = 100
     $barra.Value = $porcentaje
     $barra.Foreground = New-Brush $color
-    $barra.Background = New-Brush ([System.Windows.Media.Color]::FromArgb(80, 255, 255, 255))
+    $barra.Background = New-Brush $colorBarraFondo
     $barra.BorderThickness = 0
     $contenedor.Children.Add($barra) | Out-Null
 
@@ -1095,7 +1156,7 @@ function Refrescar-Ayuda {
         '· Codex: suma los tokens del dia desde las sesiones locales (~/.codex/sessions/<fecha>/*.jsonl) y, si el log los trae, muestra los limites de 5 hs / semanal.'
         '· OpenCode: corre `opencode stats --days 0 --json` cada 60 segundos.'
         '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Deben devolver: sessions, tokens {input, output, cache}, cost.'
-        '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion; la eleccion se guarda en config.json. Al final del popup esta la leyenda del autor.'
+        '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, y el switch "Modo claro" para cambiar el tema; todo se guarda en config.json. Al final del popup esta la leyenda del autor.'
         '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.'
     )
     foreach ($l in $lineas) {
@@ -1121,25 +1182,37 @@ foreach ($prov in $config.customProviders) {
 $filaMenuHandler = {
     param($s, $e)
     $sid = [string]$s.Tag
-    $config.sections[$sid] = -not [bool]$config.sections[$sid]
-    Guardar-Config
+    if ($sid -eq 'theme') {
+        # La fila del tema no es una seccion: alterna la paleta y repinta en caliente.
+        $config.theme = if ($config.theme -eq 'light') { 'dark' } else { 'light' }
+        Guardar-Config
+        Repintar-Tema
+    } else {
+        $config.sections[$sid] = -not [bool]$config.sections[$sid]
+        Guardar-Config
+    }
     Actualizar-Menu
     Refrescar-Todo
 }
 
 function New-FilaMenu($sec) {
-    # Fila del menu: nombre + switch on/off; toda la fila es clickeable.
+    # Fila del menu: nombre + switch on/off; toda la fila es clickeable. La fila 'theme' (Modo
+    # claro) no es una seccion: su estado sale de config.theme.
     $fila = New-Object System.Windows.Controls.Grid
     $fila.Tag = $sec.id
     $fila.Cursor = 'Hand'
-    $fila.Margin = '0,4,0,4'
+    if ($sec.margen) { $fila.Margin = $sec.margen } else { $fila.Margin = '0,4,0,4' }
     $colNombre = New-Object System.Windows.Controls.ColumnDefinition
     $colSwitch = New-Object System.Windows.Controls.ColumnDefinition
     $colSwitch.Width = 'Auto'
     $fila.ColumnDefinitions.Add($colNombre)
     $fila.ColumnDefinitions.Add($colSwitch)
 
-    $activo = [bool]$config.sections[[string]$sec.id]
+    if ($sec.id -eq 'theme') {
+        $activo = ($config.theme -eq 'light')
+    } else {
+        $activo = [bool]$config.sections[[string]$sec.id]
+    }
 
     $nombre = New-Object System.Windows.Controls.TextBlock
     $nombre.Text = $sec.nombre
@@ -1153,7 +1226,7 @@ function New-FilaMenu($sec) {
     $riel.Width = 30
     $riel.Height = 16
     $riel.CornerRadius = 8
-    if ($activo) { $riel.Background = New-Brush $colorPrimario } else { $riel.Background = New-Brush ([System.Windows.Media.Color]::FromArgb(255, 70, 78, 90)) }
+    if ($activo) { $riel.Background = New-Brush $colorPrimario } else { $riel.Background = New-Brush $colorRielOff }
     $riel.VerticalAlignment = 'Center'
     [System.Windows.Controls.Grid]::SetColumn($riel, 1)
 
@@ -1161,7 +1234,7 @@ function New-FilaMenu($sec) {
     $palanca.Width = 12
     $palanca.Height = 12
     $palanca.CornerRadius = 6
-    $palanca.Background = New-Brush ([System.Windows.Media.Color]::FromArgb(255, 240, 240, 240))
+    $palanca.Background = New-Brush $colorPalanca
     $palanca.Margin = '2'
     if ($activo) { $palanca.HorizontalAlignment = 'Right' } else { $palanca.HorizontalAlignment = 'Left' }
     $riel.Child = $palanca
@@ -1178,6 +1251,8 @@ function Actualizar-Menu {
     foreach ($sec in $seccionesMenu) {
         $panelPopup.Children.Add((New-FilaMenu $sec)) | Out-Null
     }
+    # Fila del tema, separada de las secciones (no prende/apaga nada: cambia la paleta).
+    $panelPopup.Children.Add((New-FilaMenu @{ id = 'theme'; nombre = 'Modo claro'; margen = '0,10,0,4' })) | Out-Null
     $panelPopup.Children.Add((New-Separador)) | Out-Null
     $leyenda = New-Object System.Windows.Controls.TextBlock
     $leyenda.Text = "Hecho por Luca Baello"
@@ -1189,7 +1264,7 @@ function Actualizar-Menu {
     $repo = New-Object System.Windows.Controls.TextBlock
     $repo.Text = "github.com/lucabaello1998/ai-progress"
     $repo.FontSize = 9
-    $repo.Foreground = New-Brush ([System.Windows.Media.Color]::FromArgb(255, 110, 118, 130))
+    $repo.Foreground = New-Brush $colorDim
     $repo.HorizontalAlignment = 'Center'
     $panelPopup.Children.Add($repo) | Out-Null
 }

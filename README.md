@@ -15,9 +15,9 @@ Widget flotante para Windows que muestra, siempre visible arriba a la derecha:
    archivo JSON con métricas).
 
 El **menú hamburguesa** (arriba a la derecha) abre un **popup flotante** — fondo más oscuro, no
-empuja el contenido — con *switchs* para prender/apagar cada sección; la elección se guarda en
-`config.json`. El botón **?** muestra la explicación de cómo funciona dentro del propio widget, y
-al pie del popup está la leyenda del autor.
+empuja el contenido — con *switchs* para prender/apagar cada sección y el switch **Modo claro**
+(tema claro/oscuro); todo se guarda en `config.json`. El botón **?** muestra la explicación de cómo
+funciona dentro del propio widget, y al pie del popup está la leyenda del autor.
 
 ![screenshot](docs/screenshot.png)
 
@@ -28,6 +28,25 @@ Popup del menú (switchs por sección + leyenda):
 Con la ayuda abierta (botón **?**):
 
 ![screenshot con la ayuda abierta](docs/screenshot-ayuda.png)
+
+Modo claro (switch **Modo claro** del menú):
+
+![modo claro](docs/screenshot-claro.png)
+
+## Historia
+
+`ai-progress` es la evolución de un proyecto personal anterior: **`claude-progress`**, un widget
+mínimo que armé para mirar el uso de Claude Code (ventana de 5 h y límite semanal) mientras corría
+workflows largos de agentes. Nunca fue un repo: vivió siempre en una carpeta local, como
+herramienta de trabajo.
+
+Cuando el día a día se repartió entre más herramientas — Codex, OpenCode, Claude, workflows
+multiagente — ese widget se quedó corto: solo miraba a Claude y no sabía nada de las tareas en
+curso. `ai-progress` es la generalización: un monitor flotante para todas las herramientas de IA,
+con progreso real de tareas, uso por proveedor, menú de secciones y tema claro/oscuro.
+
+La idea de fondo no cambió: pegarle un vistazo y saber qué está pasando, sin abrir una terminal ni
+cambiar de ventana.
 
 ## Requisitos
 
@@ -88,6 +107,7 @@ propio widget lo reescribe cuando usás el menú hamburguesa o el botón **?**.
   "statusPaths": ["status.json"],
   "sections": { "tasks": true, "claude": true, "codex": true, "opencode": true },
   "showHelp": false,
+  "theme": "dark",
   "opencodeCliPath": null,
   "opencodeRefreshSeconds": 60,
   "codexRefreshSeconds": 60,
@@ -132,4 +152,5 @@ Ejemplo de configuración (para cualquier CLI que exponga stats en JSON):
   tiempo total transcurrido (una pausa larga no lo infla).
 - El % de Claude es un cache de la CLI: puede quedar atrás de lo que muestra el chat (se indica la
   edad del dato). Codex se recalcula cada 60 s desde los logs; si no hubo sesiones hoy, lo dice.
-- Basado en el widget anterior para Claude Code (`claude-progress`), generalizado a IA en general.
+- Viene del widget personal para Claude Code `claude-progress`, generalizado a IA en general
+  (ver **Historia**).
