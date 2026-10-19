@@ -1,0 +1,33 @@
+{
+  "tasks": [
+    {
+      "id": "w1",
+      "name": "Workflow: auditoría multiagente (10 agentes)",
+      "journalPath": "C:\\ruta\\al\\journal.jsonl",
+      "expectedAgents": 10,
+      "startedAt": "2026-10-19T10:00:00Z",
+      "status": "running"
+    },
+    {
+      "id": "t2",
+      "name": "Build de producción (vite)",
+      "total": 3,
+      "done": 1,
+      "startedAt": "2026-10-19T10:00:00Z",
+      "status": "running",
+      "detail": "paso 2 de 3"
+    },
+    {
+      "id": "t3",
+      "name": "Medición A/B de bundle",
+      "progress": 0.57,
+      "startedAt": "2026-10-19T10:00:00Z",
+      "status": "running"
+    },
+    {
+      "id": "t4",
+      "name": "Revisión mensual de objetivos",
+      "status": "done"
+    }
+  ]
+}

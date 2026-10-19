@@ -1,0 +1,4 @@
+# Estado vivo: lo escribe cada agente al lanzar tareas largas.
+status.json
+# Config local (rutas y preferencias de cada máquina).
+config.json
