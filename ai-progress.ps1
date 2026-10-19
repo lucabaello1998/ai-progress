@@ -110,6 +110,7 @@ $script:usoCodex = $null
 $script:usoCodexLeidoEn = $null
 $script:customUso = @{}
 $script:customLeido = @{}
+$script:popupCerradoEn = [datetime]::MinValue
 
 function New-Brush($color) { New-Object System.Windows.Media.SolidColorBrush $color }
 
@@ -340,15 +341,27 @@ foreach ($i in 1..3) {
 }
 $botonMenu.Child = $lineasHamburguesa
 [System.Windows.Controls.Grid]::SetColumn($botonMenu, 1)
+# Down solo evita que el header arrastre la ventana; el toggle del popup va en Up: con
+# StaysOpen=false, abrir el popup con el mouse todavia apretado hace que el mismo click lo
+# cierre al instante. Ademas se difiere la apertura al dispatcher: se abre cuando el evento
+# de click ya termino del todo.
 $botonMenu.Add_MouseLeftButtonDown({
     param($s, $e)
     $e.Handled = $true
+})
+$botonMenu.Add_MouseLeftButtonUp({
+    param($s, $e)
+    $e.Handled = $true
     if ($popup.IsOpen) { $popup.IsOpen = $false; return }
-    Actualizar-Menu
-    # Alineado a la derecha del boton (el marco tiene 12px de margen para la sombra).
-    $popup.HorizontalOffset = [double]$botonMenu.ActualWidth - ($marcoPopup.Width + 24)
-    $popup.VerticalOffset = -6
-    $popup.IsOpen = $true
+    # Si el popup se acaba de cerrar con este mismo click, no reabrirlo por rebote.
+    if (((Get-Date) - $script:popupCerradoEn).TotalMilliseconds -lt 250) { return }
+    $s.Dispatcher.BeginInvoke([System.Windows.Threading.DispatcherPriority]::Background, [action]{
+        Actualizar-Menu
+        # Alineado a la derecha del boton (el marco tiene 12px de margen para la sombra).
+        $popup.HorizontalOffset = [double]$botonMenu.ActualWidth - ($marcoPopup.Width + 24)
+        $popup.VerticalOffset = -6
+        $popup.IsOpen = $true
+    }) | Out-Null
 })
 $header.Children.Add($botonMenu) | Out-Null
 
@@ -423,6 +436,7 @@ $popup.Add_Opened({
     foreach ($lineaMenu in $lineasHamburguesa.Children) { $lineaMenu.Background = New-Brush $colorPrimario }
 })
 $popup.Add_Closed({
+    $script:popupCerradoEn = Get-Date
     foreach ($lineaMenu in $lineasHamburguesa.Children) { $lineaMenu.Background = New-Brush $colorTextoSecundario }
 })
 
