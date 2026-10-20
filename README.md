@@ -1,6 +1,6 @@
 # ai-progress
 
-Widget flotante para Windows que muestra, siempre visible arriba a la derecha:
+Widget flotante para **Windows y Linux** que muestra, siempre visible arriba a la derecha:
 
 1. **Tareas de agentes de IA** — barras de progreso reales, leyendo un `status.json` que
    mantienen los agentes (Claude Code, OpenCode o cualquier script propio).
@@ -15,9 +15,10 @@ Widget flotante para Windows que muestra, siempre visible arriba a la derecha:
    archivo JSON con métricas).
 
 El **menú hamburguesa** (arriba a la derecha) abre un **popup flotante** — con fondo y borde
-propios, no empuja el contenido — con *switchs* para prender/apagar cada sección y el switch **Modo claro**
-(tema claro/oscuro); todo se guarda en `config.json`. El botón **?** muestra la explicación de cómo
-funciona dentro del propio widget, y al pie del popup está la leyenda del autor.
+propios, no empuja el contenido — con *switchs* para prender/apagar cada sección, el switch **Modo claro**
+(tema claro/oscuro) y el switch **English** (idioma de la interfaz); todo se guarda en `config.json`.
+El botón **?** muestra la explicación de cómo funciona dentro del propio widget, y al pie del popup
+está la leyenda del autor.
 
 ![screenshot](docs/screenshot.png)
 
@@ -32,6 +33,14 @@ Con la ayuda abierta (botón **?**):
 Modo claro (switch **Modo claro** del menú):
 
 ![modo claro](docs/screenshot-claro.png)
+
+En inglés (switch **English** del menú):
+
+![interfaz en inglés](docs/screenshot-en.png)
+
+Versión Linux (Python + GTK3), mismo widget y mismos datos:
+
+![versión Linux](docs/screenshot-linux.png)
 
 ## Historia
 
@@ -50,15 +59,17 @@ cambiar de ventana.
 
 ## Requisitos
 
-- Windows + **PowerShell 7** (`pwsh`) — usa `ConvertFrom-Json -AsHashtable`.
+- Windows + **PowerShell 7** (`pwsh`) — usa `ConvertFrom-Json -AsHashtable` — o Linux + **Python 3**
+  + **GTK3** (`python3-gi`, `gir1.2-gtk-3.0`).
 - Opcional: CLI de OpenCode (`opencode` en el PATH, `%USERPROFILE%\bin\opencode.exe`, o el que
   trae OpenCode Desktop) para la sección de OpenCode. La de Codex funciona con solo tener sus
   logs locales.
 
 ## Uso
 
-- Doble clic en `launch.vbs` (no abre consola).
-- O desde consola: `pwsh -NoProfile -ExecutionPolicy Bypass -File .\ai-progress.ps1`.
+- **Windows**: doble clic en `launch.vbs` (no abre consola).
+- **Windows** desde consola: `pwsh -NoProfile -ExecutionPolicy Bypass -File .\ai-progress.ps1`.
+- **Linux**: `python3 ai-progress-gtk.py` (ver [Linux (GTK3)](#linux-gtk3)).
 
 Es un monitor: cerrar la ventana no cancela ninguna tarea.
 
@@ -96,6 +107,17 @@ lanzar tareas largas; por ejemplo:
 }
 ```
 
+## Idiomas
+
+La interfaz está en **español e inglés**. Se elige con `language` en `config.json`:
+
+- `"auto"` (default): español si el idioma de la interfaz del sistema es español; inglés en
+  cualquier otro caso.
+- `"es"` / `"en"`: fija el idioma.
+
+El switch **English** del menú lo cambia en caliente y lo guarda. En la versión Linux también se
+puede forzar con `--lang en` sin tocar el archivo.
+
 ## Configuración (`config.json`)
 
 Copiá [`config.example.json`](config.example.json) a `config.json` y editá lo que necesites.
@@ -108,6 +130,7 @@ propio widget lo reescribe cuando usás el menú hamburguesa o el botón **?**.
   "sections": { "tasks": true, "claude": true, "codex": true, "opencode": true },
   "showHelp": false,
   "theme": "dark",
+  "language": "auto",
   "opencodeCliPath": null,
   "opencodeRefreshSeconds": 60,
   "codexRefreshSeconds": 60,
@@ -146,8 +169,27 @@ Ejemplo de configuración (para cualquier CLI que exponga stats en JSON):
 }
 ```
 
+## Linux (GTK3)
+
+[`ai-progress-gtk.py`](ai-progress-gtk.py) es la versión Linux del widget: mismo `config.json`,
+mismo `status.json`, mismas secciones, temas e idiomas; usa Python 3 + GTK3 (PyGObject).
+
+```bash
+sudo apt install python3-gi python3-cairo python3-gi-cairo gir1.2-gtk-3.0
+python3 ai-progress-gtk.py
+```
+
+- Si hay Wayland con XWayland, arranca en X11 para poder posicionarse arriba a la derecha y quedar
+  siempre arriba (en Wayland puro el compositor manda).
+- `--dump` imprime el modelo completo (datos + textos ya formateados) como JSON, sin abrir ventana:
+  sirve para probar la lógica en un server o en CI.
+- `--screenshot salida.png` se autofotografía y cierra (documentación).
+- `--lang es|en` y `--theme dark|light` fuerzan idioma y tema para esa ejecución.
+
 ## Notas
 
+- Las dos versiones (Windows/PowerShell y Linux/GTK) comparten `config.json` y `status.json`: podés
+  usar la misma carpeta en ambos sistemas.
 - Solo lee archivos locales; no manda nada a ninguna API. Los únicos procesos que ejecuta son
   los CLIs configurados (OpenCode y los `customProviders`).
 - El ETA de workflows es **estimado**: usa la duración real de los agentes ya terminados, no el

@@ -35,6 +35,7 @@
 #     "sections": { "tasks": true, "claude": true, "codex": true, "opencode": true },
 #     "showHelp": false,
 #     "theme": "dark",
+#     "language": "auto",
 #     "opencodeCliPath": null,
 #     "opencodeRefreshSeconds": 60,
 #     "codexRefreshSeconds": 60,
@@ -58,6 +59,7 @@ $config = @{
     sections               = @{ tasks = $true; claude = $true; codex = $true; opencode = $true }
     showHelp               = $false
     theme                  = 'dark'
+    language               = 'auto'
     customProviders        = @()
 }
 # El -AsHashtable de pwsh devuelve mapas case-sensitive ("Theme" no matchea "theme"): normalizo
@@ -103,6 +105,7 @@ if (Test-Path $configPath) {
         }
         if ($null -ne $cfg['showHelp']) { $config.showHelp = [bool]$cfg['showHelp'] }
         if (@('dark', 'light') -contains [string]$cfg['theme']) { $config.theme = [string]$cfg['theme'] }
+        if (@('auto', 'es', 'en') -contains [string]$cfg['language']) { $config.language = [string]$cfg['language'] }
         if ($cfg['customProviders']) {
             $config.customProviders = @($cfg['customProviders'] | Where-Object { $_['id'] -and ($_['command'] -or $_['file']) })
         }
@@ -115,6 +118,99 @@ if (Test-Path $configPath) {
 foreach ($prov in $config.customProviders) {
     $cid = 'custom:' + [string]$prov['id']
     if ($null -eq $config.sections[$cid]) { $config.sections[$cid] = $true }
+}
+
+# ---------- Idioma (es | en) ----------
+# config.language: 'auto' (segun el idioma de la interfaz del sistema), 'es' o 'en'.
+if (@('es', 'en') -contains [string]$config.language) {
+    $script:idioma = [string]$config.language
+} elseif ([System.Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName -eq 'es') {
+    $script:idioma = 'es'
+} else {
+    $script:idioma = 'en'
+}
+
+# Todos los textos de la interfaz, en un solo lugar. T('clave') devuelve el texto del idioma
+# activo (o la clave misma si falta); TF('clave', @(a, b)) lo formatea con -f.
+$script:txt = @{
+    titulo            = @{ es = 'Progreso IA'; en = 'AI progress' }
+    sec_tasks         = @{ es = 'Tareas'; en = 'Tasks' }
+    sec_claude        = @{ es = 'Claude'; en = 'Claude' }
+    sec_codex         = @{ es = 'Codex'; en = 'Codex' }
+    sec_opencode      = @{ es = 'OpenCode'; en = 'OpenCode' }
+    activas           = @{ es = '{0} activas'; en = '{0} active' }
+    sin_tareas        = @{ es = 'Sin tareas en curso.'; en = 'No tasks running.' }
+    listo             = @{ es = 'Listo'; en = 'Done' }
+    error             = @{ es = 'Error'; en = 'Error' }
+    agentes           = @{ es = '{0}/{1} agentes'; en = '{0}/{1} agents' }
+    terminando        = @{ es = 'terminando...'; en = 'finishing...' }
+    restantes         = @{ es = '~{0} restantes (estimado)'; en = '~{0} left (estimated)' }
+    estimando         = @{ es = 'estimando tiempo...'; en = 'estimating time...' }
+    contador_hace     = @{ es = '{0}/{1} - hace {2}'; en = '{0}/{1} - {2} ago' }
+    pct_hace          = @{ es = '{0}% - hace {1}'; en = '{0}% - {1} ago' }
+    progreso_hace     = @{ es = 'En progreso - hace {0}'; en = 'In progress - {0} ago' }
+    dur_menos_1       = @{ es = 'menos de 1 min'; en = 'less than 1 min' }
+    reset_hoy         = @{ es = 'reinicia hoy a las {0}'; en = 'resets today at {0}' }
+    reset_dia         = @{ es = 'reinicia el {0} a las {1}'; en = 'resets {0} at {1}' }
+    sin_datos         = @{ es = 'sin datos'; en = 'no data' }
+    edad_desconocida  = @{ es = 'edad del dato desconocida'; en = 'data age unknown' }
+    dato_hace_s       = @{ es = 'dato de hace {0}s'; en = 'data from {0}s ago' }
+    dato_hace         = @{ es = 'dato de hace {0}'; en = 'data from {0} ago' }
+    puede_atras       = @{ es = 'dato de hace {0} (puede ir atras)'; en = 'data from {0} ago (may be behind)' }
+    uso_claude        = @{ es = 'Uso - Claude'; en = 'Usage - Claude' }
+    sin_uso           = @{ es = 'Sin datos de uso todavia.'; en = 'No usage data yet.' }
+    claude_nota       = @{ es = 'Cache de la CLI, no se refresca sola - corre /usage en Claude de vez en cuando.'; en = 'CLI cache, it does not refresh on its own - run /usage in Claude now and then.' }
+    sesion_5h         = @{ es = 'Sesion (5 hs)'; en = 'Session (5 h)' }
+    semanal_7d        = @{ es = 'Semanal (7 dias)'; en = 'Weekly (7 days)' }
+    actualizado_s     = @{ es = 'actualizado hace {0}s'; en = 'updated {0}s ago' }
+    actualizado       = @{ es = 'actualizado hace {0}'; en = 'updated {0} ago' }
+    uso_codex         = @{ es = 'Uso - Codex (hoy)'; en = 'Usage - Codex (today)' }
+    codex_sin_carpeta = @{ es = 'No encontre sesiones de Codex (~/.codex/sessions).'; en = 'No Codex sessions found (~/.codex/sessions).' }
+    codex_sin_hoy     = @{ es = 'Sin sesiones de Codex hoy.'; en = 'No Codex sessions today.' }
+    n_sesion1         = @{ es = '1 sesion'; en = '1 session' }
+    n_sesiones        = @{ es = '{0} sesiones'; en = '{0} sessions' }
+    n_prompt1         = @{ es = '1 prompt'; en = '1 prompt' }
+    n_prompts         = @{ es = '{0} prompts'; en = '{0} prompts' }
+    n_paso1           = @{ es = '1 paso'; en = '1 step' }
+    n_pasos           = @{ es = '{0} pasos'; en = '{0} steps' }
+    razonamiento      = @{ es = 'razonamiento'; en = 'reasoning' }
+    uso_opencode      = @{ es = 'Uso - OpenCode (hoy)'; en = 'Usage - OpenCode (today)' }
+    opencode_sin_cli  = @{ es = 'Sin datos: no encontre el CLI de OpenCode (config.json -> opencodeCliPath) o el servicio no responde.'; en = 'No data: OpenCode CLI not found (config.json -> opencodeCliPath) or the service is not responding.' }
+    uso_prov          = @{ es = 'Uso - {0} (hoy)'; en = 'Usage - {0} (today)' }
+    prov_sin_datos    = @{ es = 'Sin datos: revisa command/file y args del proveedor en config.json.'; en = 'No data: check the provider command/file and args in config.json.' }
+    prov_detalle      = @{ es = '{0} sesiones - {1} prompts - {2} pasos'; en = '{0} sessions - {1} prompts - {2} steps' }
+    costo             = @{ es = 'Costo: $ {0}'; en = 'Cost: $ {0}' }
+    sin_metricas      = @{ es = 'Sin metricas para hoy.'; en = 'No metrics for today.' }
+    ayuda_titulo      = @{ es = 'Como funciona'; en = 'How it works' }
+    ayuda_1           = @{ es = '· Tareas: los agentes escriben status.json al lanzar tareas largas. Si la tarea trae journalPath, se cuenta 1 linea por agente ("started"/"result") y el ETA usa la duracion real de los agentes YA terminados.'; en = '· Tasks: agents write status.json when they launch long tasks. If the task has journalPath, one line per agent ("started"/"result") is counted and the ETA uses the real duration of agents that ALREADY finished.' }
+    ayuda_2           = @{ es = '· Claude: lee el cache de uso que la CLI deja en ~/.claude.json. No se refresca solo: corre /usage en Claude de vez en cuando.'; en = '· Claude: reads the usage cache the CLI leaves in ~/.claude.json. It does not refresh on its own: run /usage in Claude now and then.' }
+    ayuda_3           = @{ es = '· Codex: suma los tokens del dia desde las sesiones locales (~/.codex/sessions/<fecha>/*.jsonl) y, si el log los trae, muestra los limites de 5 hs / semanal.'; en = '· Codex: adds up today tokens from local sessions (~/.codex/sessions/<date>/*.jsonl) and, if the log includes them, shows the 5 h / weekly limits.' }
+    ayuda_4           = @{ es = '· OpenCode: corre `opencode stats --days 0 --json` cada 60 segundos.'; en = '· OpenCode: runs `opencode stats --days 0 --json` every 60 seconds.' }
+    ayuda_5           = @{ es = '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Pueden devolver (todo opcional): sessions, prompts, steps, tokens {input, output, cache}, cost.'; en = '· Other models: add them in config.json -> customProviders, with a CLI command (command + args) or a JSON file (file). They can return (all optional): sessions, prompts, steps, tokens {input, output, cache}, cost.' }
+    ayuda_6           = @{ es = '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, el switch "Modo claro" para cambiar el tema y el switch "English" para pasar la interfaz a ingles; todo se guarda en config.json. Al final del popup esta la leyenda del autor.'; en = '· The hamburger menu above (right side) opens a popup with switches to turn each section on/off, the "Light mode" switch to change the theme and the language switch to switch between Spanish and English; everything is saved in config.json. The author credit is at the bottom of the popup.' }
+    ayuda_7           = @{ es = '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.'; en = '· Everything is local: the widget sends nothing to any API; it only reads files and runs already installed CLIs.' }
+    modo_claro        = @{ es = 'Modo claro'; en = 'Light mode' }
+    leyenda           = @{ es = 'Hecho por Luca Baello'; en = 'Made by Luca Baello' }
+}
+
+function T([string]$clave) {
+    $par = $script:txt[$clave]
+    if ($null -eq $par) { return $clave }
+    $valor = $par[$script:idioma]
+    if ($null -eq $valor) { return $clave }
+    return [string]$valor
+}
+
+function TF([string]$clave, [object[]]$valores) {
+    return ((T $clave) -f $valores)
+}
+
+# Reetiqueta el chrome fijo (el texto que no se reconstruye en cada refresco). El menu y las
+# secciones se rehacen solos con Actualizar-Menu / Refrescar-Todo.
+function Reetiquetar-UI {
+    $t = T 'titulo'
+    $window.Title = $t
+    $tituloVentana.Text = $t
 }
 
 # ---------- Colores ----------
@@ -149,7 +245,7 @@ function Read-ArchivoCompartido([string]$path) {
 }
 
 function Format-Duracion([double]$minutos) {
-    if ($minutos -lt 1) { return "menos de 1 min" }
+    if ($minutos -lt 1) { return (T 'dur_menos_1') }
     if ($minutos -lt 60) { return "$([math]::Round($minutos)) min" }
     $horas = [math]::Floor($minutos / 60)
     $restoMin = [math]::Round($minutos % 60)
@@ -188,9 +284,9 @@ function Convertir-Entero($valor, [int]$defecto = 0) {
 
 function Format-FechaResetLocal($local) {
     if ($local.Date -eq (Get-Date).Date) {
-        return "reinicia hoy a las $($local.ToString('HH:mm'))"
+        return (TF 'reset_hoy' @($local.ToString('HH:mm')))
     }
-    return "reinicia el $($local.ToString('dd/MM')) a las $($local.ToString('HH:mm'))"
+    return (TF 'reset_dia' @($local.ToString('dd/MM'), $local.ToString('HH:mm')))
 }
 
 function Format-Reset($resetsAt) {
@@ -308,6 +404,7 @@ function Guardar-Config {
             sections               = $config.sections
             showHelp               = [bool]$config.showHelp
             theme                  = [string]$config.theme
+            language               = [string]$config.language
             customProviders        = @($config.customProviders)
         }
         $salida = $obj
@@ -401,7 +498,7 @@ Aplicar-Tema
 $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
 
 $window = New-Object System.Windows.Window
-$window.Title = "Progreso IA"
+$window.Title = T 'titulo'
 $window.WindowStyle = 'None'
 $window.AllowsTransparency = $true
 $window.Background = [System.Windows.Media.Brushes]::Transparent
@@ -446,7 +543,7 @@ $header.ColumnDefinitions.Add($colAyuda)
 $header.ColumnDefinitions.Add($colCerrar)
 
 $tituloVentana = New-Object System.Windows.Controls.TextBlock
-$tituloVentana.Text = "Progreso IA"
+$tituloVentana.Text = T 'titulo'
 $tituloVentana.Foreground = New-Brush $colorTexto
 $tituloVentana.FontWeight = 'Bold'
 $tituloVentana.FontSize = 13
@@ -705,10 +802,10 @@ function Refrescar-Tareas {
     }
 
     $activas = @($tareas | Where-Object { $_.status -ne 'done' -and $_.status -ne 'error' }).Count
-    $panelTareas.Children.Add((New-EncabezadoSeccion "Tareas" "$activas activas" $null 12)) | Out-Null
+    $panelTareas.Children.Add((New-EncabezadoSeccion (T 'sec_tasks') (TF 'activas' @($activas)) $null 12)) | Out-Null
 
     if ($tareas.Count -eq 0) {
-        $panelTareas.Children.Add((New-Texto "Sin tareas en curso." 11 $colorTextoSecundario $true '0,4,0,0')) | Out-Null
+        $panelTareas.Children.Add((New-Texto (T 'sin_tareas') 11 $colorTextoSecundario $true '0,4,0,0')) | Out-Null
         return
     }
 
@@ -780,10 +877,10 @@ function Refrescar-Tareas {
         $detalle.TextWrapping = 'Wrap'
 
         if ($estado -eq 'done') {
-            $detalle.Text = "Listo"
+            $detalle.Text = (T 'listo')
             $detalle.Foreground = New-Brush $colorOk
         } elseif ($estado -eq 'error') {
-            $detalle.Text = "Error"
+            $detalle.Text = (T 'error')
             $detalle.Foreground = New-Brush $colorDanger
         } else {
             $elapsedMin = 0
@@ -791,26 +888,26 @@ function Refrescar-Tareas {
             if ($null -ne $inicio) { $elapsedMin = ((Get-Date) - $inicio).TotalMinutes }
 
             if ($tieneJournal -and $esperados -gt 0) {
-                $texto = "$completados/$esperados agentes"
+                $texto = TF 'agentes' @($completados, $esperados)
                 $restantes = $esperados - $completados
                 if ($restantes -le 0) {
-                    $texto += " - terminando..."
+                    $texto += " - " + (T 'terminando')
                 } else {
                     $etaMin = Get-EtaMinutos $esperados $completados $duraciones $enVuelo
                     if ($null -ne $etaMin) {
-                        $texto += " - ~$(Format-Duracion $etaMin) restantes (estimado)"
+                        $texto += " - " + (TF 'restantes' @((Format-Duracion $etaMin)))
                     } else {
-                        $texto += " - estimando tiempo..."
+                        $texto += " - " + (T 'estimando')
                     }
                 }
                 $detalle.Text = $texto
             } elseif ($total -gt 0) {
-                $detalle.Text = "$hechos/$total - hace $(Format-Duracion $elapsedMin)"
+                $detalle.Text = TF 'contador_hace' @($hechos, $total, (Format-Duracion $elapsedMin))
             } elseif ($null -ne $tarea.progress) {
                 $pct = [math]::Round((Convertir-Numero $tarea.progress) * 100)
-                $detalle.Text = "$pct% - hace $(Format-Duracion $elapsedMin)"
+                $detalle.Text = TF 'pct_hace' @($pct, (Format-Duracion $elapsedMin))
             } else {
-                $detalle.Text = "En progreso - hace $(Format-Duracion $elapsedMin)"
+                $detalle.Text = TF 'progreso_hace' @((Format-Duracion $elapsedMin))
             }
         }
         $fila.Children.Add($detalle) | Out-Null
@@ -923,32 +1020,32 @@ function Refrescar-UsoClaude {
     $textoEdad = $null
     $colorEdad = $colorTextoSecundario
     if ($null -eq $uso) {
-        $textoEdad = "sin datos"
+        $textoEdad = (T 'sin_datos')
     } elseif ($null -eq $uso.EdadDatoSegundos) {
-        $textoEdad = "edad del dato desconocida"
+        $textoEdad = (T 'edad_desconocida')
     } else {
         $edadMin = $uso.EdadDatoSegundos / 60
         if ($uso.EdadDatoSegundos -lt 60) {
-            $textoEdad = "dato de hace $([math]::Round($uso.EdadDatoSegundos))s"
+            $textoEdad = TF 'dato_hace_s' @([math]::Round($uso.EdadDatoSegundos))
             $colorEdad = $colorOk
         } elseif ($edadMin -lt 5) {
-            $textoEdad = "dato de hace $(Format-Duracion $edadMin)"
+            $textoEdad = TF 'dato_hace' @((Format-Duracion $edadMin))
         } else {
-            $textoEdad = "dato de hace $(Format-Duracion $edadMin) (puede ir atras)"
+            $textoEdad = TF 'puede_atras' @((Format-Duracion $edadMin))
             $colorEdad = $colorWarning
         }
     }
-    $panelClaude.Children.Add((New-EncabezadoSeccion "Uso - Claude" $textoEdad $colorEdad 12)) | Out-Null
+    $panelClaude.Children.Add((New-EncabezadoSeccion (T 'uso_claude') $textoEdad $colorEdad 12)) | Out-Null
 
     if ($null -eq $uso) {
-        $panelClaude.Children.Add((New-Texto "Sin datos de uso todavia." 11 $colorTextoSecundario $true)) | Out-Null
+        $panelClaude.Children.Add((New-Texto (T 'sin_uso') 11 $colorTextoSecundario $true)) | Out-Null
         return
     }
 
-    $panelClaude.Children.Add((New-Texto "Cache de la CLI, no se refresca sola - corre /usage en Claude de vez en cuando." 9 $colorTextoSecundario $true '0,4,0,2')) | Out-Null
+    $panelClaude.Children.Add((New-Texto (T 'claude_nota') 9 $colorTextoSecundario $true '0,4,0,2')) | Out-Null
 
-    $panelClaude.Children.Add((New-FilaBarra "Sesion (5 hs)" $uso.CincoHorasPorcentaje $uso.CincoHorasReset (Get-ColorPorPorcentaje $uso.CincoHorasPorcentaje))) | Out-Null
-    $panelClaude.Children.Add((New-FilaBarra "Semanal (7 dias)" $uso.SieteDiasPorcentaje $uso.SieteDiasReset (Get-ColorPorPorcentaje $uso.SieteDiasPorcentaje))) | Out-Null
+    $panelClaude.Children.Add((New-FilaBarra (T 'sesion_5h') $uso.CincoHorasPorcentaje $uso.CincoHorasReset (Get-ColorPorPorcentaje $uso.CincoHorasPorcentaje))) | Out-Null
+    $panelClaude.Children.Add((New-FilaBarra (T 'semanal_7d') $uso.SieteDiasPorcentaje $uso.SieteDiasReset (Get-ColorPorPorcentaje $uso.SieteDiasPorcentaje))) | Out-Null
 }
 
 # ================= Uso de Codex =================
@@ -1022,36 +1119,36 @@ function Refrescar-UsoCodex {
     $textoEdad = $null
     if ($null -ne $script:usoCodexLeidoEn) {
         $seg = ((Get-Date) - $script:usoCodexLeidoEn).TotalSeconds
-        if ($seg -lt 90) { $textoEdad = "actualizado hace $([math]::Round($seg))s" }
-        else { $textoEdad = "actualizado hace $(Format-Duracion ($seg / 60))" }
+        if ($seg -lt 90) { $textoEdad = TF 'actualizado_s' @([math]::Round($seg)) }
+        else { $textoEdad = TF 'actualizado' @((Format-Duracion ($seg / 60))) }
     } else {
-        $textoEdad = "sin datos"
+        $textoEdad = (T 'sin_datos')
     }
-    $panelCodex.Children.Add((New-EncabezadoSeccion "Uso - Codex (hoy)" $textoEdad $colorCodex 12)) | Out-Null
+    $panelCodex.Children.Add((New-EncabezadoSeccion (T 'uso_codex') $textoEdad $colorCodex 12)) | Out-Null
 
     $uso = Get-UsoCodex
     if ($null -eq $uso) {
-        $panelCodex.Children.Add((New-Texto "No encontre sesiones de Codex (~/.codex/sessions)." 11 $colorTextoSecundario $true)) | Out-Null
+        $panelCodex.Children.Add((New-Texto (T 'codex_sin_carpeta') 11 $colorTextoSecundario $true)) | Out-Null
         return
     }
     if ($uso.Sesiones -eq 0) {
-        $panelCodex.Children.Add((New-Texto "Sin sesiones de Codex hoy." 11 $colorTextoSecundario $true)) | Out-Null
+        $panelCodex.Children.Add((New-Texto (T 'codex_sin_hoy') 11 $colorTextoSecundario $true)) | Out-Null
         return
     }
 
     if ($null -ne $uso.Rate5) {
-        $panelCodex.Children.Add((New-FilaBarra "Sesion (5 hs)" $uso.Rate5 $uso.Reset5 (Get-ColorPorPorcentaje $uso.Rate5))) | Out-Null
+        $panelCodex.Children.Add((New-FilaBarra (T 'sesion_5h') $uso.Rate5 $uso.Reset5 (Get-ColorPorPorcentaje $uso.Rate5))) | Out-Null
     }
     if ($null -ne $uso.Rate7) {
-        $panelCodex.Children.Add((New-FilaBarra "Semanal (7 dias)" $uso.Rate7 $uso.Reset7 (Get-ColorPorPorcentaje $uso.Rate7))) | Out-Null
+        $panelCodex.Children.Add((New-FilaBarra (T 'semanal_7d') $uso.Rate7 $uso.Reset7 (Get-ColorPorPorcentaje $uso.Rate7))) | Out-Null
     }
 
-    $sesionTxt = if ($uso.Sesiones -eq 1) { "1 sesion" } else { "$($uso.Sesiones) sesiones" }
+    $sesionTxt = if ($uso.Sesiones -eq 1) { T 'n_sesion1' } else { TF 'n_sesiones' @($uso.Sesiones) }
     $panelCodex.Children.Add((New-Texto $sesionTxt 11 $colorTexto $false '0,4,0,2')) | Out-Null
     $lineaTokens = "Tokens: $(Format-Numero $uso.TokenIn) in"
     if ($uso.TokenCache -gt 0) { $lineaTokens += " ($(Format-Numero $uso.TokenCache) cache)" }
     $lineaTokens += " - $(Format-Numero $uso.TokenOut) out"
-    if ($uso.Razonamiento -gt 0) { $lineaTokens += " - $(Format-Numero $uso.Razonamiento) razonamiento" }
+    if ($uso.Razonamiento -gt 0) { $lineaTokens += " - $(Format-Numero $uso.Razonamiento) $(T 'razonamiento')" }
     $panelCodex.Children.Add((New-Texto $lineaTokens 11 $colorTextoSecundario)) | Out-Null
 }
 
@@ -1112,26 +1209,26 @@ function Refrescar-UsoOpenCode {
     $textoEdad = $null
     if ($null -ne $script:usoOpenCodeLeidoEn) {
         $seg = ((Get-Date) - $script:usoOpenCodeLeidoEn).TotalSeconds
-        if ($seg -lt 90) { $textoEdad = "actualizado hace $([math]::Round($seg))s" }
-        else { $textoEdad = "actualizado hace $(Format-Duracion ($seg / 60))" }
+        if ($seg -lt 90) { $textoEdad = TF 'actualizado_s' @([math]::Round($seg)) }
+        else { $textoEdad = TF 'actualizado' @((Format-Duracion ($seg / 60))) }
     } else {
-        $textoEdad = "sin datos"
+        $textoEdad = (T 'sin_datos')
     }
-    $panelOpenCode.Children.Add((New-EncabezadoSeccion "Uso - OpenCode (hoy)" $textoEdad $colorOpenCode 12)) | Out-Null
+    $panelOpenCode.Children.Add((New-EncabezadoSeccion (T 'uso_opencode') $textoEdad $colorOpenCode 12)) | Out-Null
 
     if ($null -eq $uso) {
-        $panelOpenCode.Children.Add((New-Texto "Sin datos: no encontre el CLI de OpenCode (config.json -> opencodeCliPath) o el servicio no responde." 10 $colorTextoSecundario $true '0,4,0,0')) | Out-Null
+        $panelOpenCode.Children.Add((New-Texto (T 'opencode_sin_cli') 10 $colorTextoSecundario $true '0,4,0,0')) | Out-Null
         return
     }
 
-    $sesionTxt = if ($uso.Sesiones -eq 1) { "1 sesion" } else { "$($uso.Sesiones) sesiones" }
-    $promptTxt = if ($uso.Prompts -eq 1) { "1 prompt" } else { "$($uso.Prompts) prompts" }
-    $pasoTxt = if ($uso.Pasos -eq 1) { "1 paso" } else { "$($uso.Pasos) pasos" }
+    $sesionTxt = if ($uso.Sesiones -eq 1) { T 'n_sesion1' } else { TF 'n_sesiones' @($uso.Sesiones) }
+    $promptTxt = if ($uso.Prompts -eq 1) { T 'n_prompt1' } else { TF 'n_prompts' @($uso.Prompts) }
+    $pasoTxt = if ($uso.Pasos -eq 1) { T 'n_paso1' } else { TF 'n_pasos' @($uso.Pasos) }
 
     $panelOpenCode.Children.Add((New-Texto "$sesionTxt - $promptTxt - $pasoTxt" 11 $colorTexto $false '0,4,0,2')) | Out-Null
     $panelOpenCode.Children.Add((New-Texto "Tokens: $(Format-Numero $uso.TokenIn) in - $(Format-Numero $uso.TokenOut) out - $(Format-Numero $uso.TokenCache) cache" 11 $colorTextoSecundario)) | Out-Null
     $costoTxt = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0:0.00}', $uso.Costo)
-    $panelOpenCode.Children.Add((New-Texto "Costo: `$ $costoTxt" 11 $colorTextoSecundario)) | Out-Null
+    $panelOpenCode.Children.Add((New-Texto (TF 'costo' @($costoTxt)) 11 $colorTextoSecundario)) | Out-Null
 }
 
 # ================= Proveedores propios (config.json -> customProviders) =================
@@ -1192,27 +1289,27 @@ function Refrescar-ProvidersCustom {
         $textoEdad = $null
         if ($script:customLeido[$id] -and $null -ne $uso) {
             $seg = ((Get-Date) - $script:customLeido[$id]).TotalSeconds
-            if ($seg -lt 90) { $textoEdad = "actualizado hace $([math]::Round($seg))s" }
-            else { $textoEdad = "actualizado hace $(Format-Duracion ($seg / 60))" }
+            if ($seg -lt 90) { $textoEdad = TF 'actualizado_s' @([math]::Round($seg)) }
+            else { $textoEdad = TF 'actualizado' @((Format-Duracion ($seg / 60))) }
         }
-        $panelCustom.Children.Add((New-EncabezadoSeccion "Uso - $nombre (hoy)" $textoEdad $colorCustom 12)) | Out-Null
+        $panelCustom.Children.Add((New-EncabezadoSeccion (TF 'uso_prov' @($nombre)) $textoEdad $colorCustom 12)) | Out-Null
 
         if ($null -eq $uso) {
-            $panelCustom.Children.Add((New-Texto "Sin datos: revisa command/file y args del proveedor en config.json." 10 $colorTextoSecundario $true '0,4,0,0')) | Out-Null
+            $panelCustom.Children.Add((New-Texto (T 'prov_sin_datos') 10 $colorTextoSecundario $true '0,4,0,0')) | Out-Null
             continue
         }
         $detalle = @()
         if ($uso.Sesiones -or $uso.Prompts -or $uso.Pasos) {
-            $detalle += "$($uso.Sesiones) sesiones - $($uso.Prompts) prompts - $($uso.Pasos) pasos"
+            $detalle += TF 'prov_detalle' @($uso.Sesiones, $uso.Prompts, $uso.Pasos)
         }
         if ($uso.TokenIn -or $uso.TokenOut -or $uso.TokenCache) {
             $detalle += "Tokens: $(Format-Numero $uso.TokenIn) in - $(Format-Numero $uso.TokenOut) out - $(Format-Numero $uso.TokenCache) cache"
         }
         if ($uso.Costo -gt 0) {
             $costoTxt = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, '{0:0.00}', $uso.Costo)
-            $detalle += "Costo: `$ $costoTxt"
+            $detalle += (TF 'costo' @($costoTxt))
         }
-        if ($detalle.Count -eq 0) { $detalle += "Sin metricas para hoy." }
+        if ($detalle.Count -eq 0) { $detalle += (T 'sin_metricas') }
         foreach ($l in $detalle) {
             $panelCustom.Children.Add((New-Texto $l 11 $colorTextoSecundario)) | Out-Null
         }
@@ -1225,15 +1322,15 @@ function Refrescar-Ayuda {
     Set-Visible $contAyuda ([bool]$config.showHelp)
     if (-not $config.showHelp) { return }
 
-    $panelAyuda.Children.Add((New-EncabezadoSeccion "Como funciona" $null $null 12)) | Out-Null
+    $panelAyuda.Children.Add((New-EncabezadoSeccion (T 'ayuda_titulo') $null $null 12)) | Out-Null
     $lineas = @(
-        '· Tareas: los agentes escriben status.json al lanzar tareas largas. Si la tarea trae journalPath, se cuenta 1 linea por agente ("started"/"result") y el ETA usa la duracion real de los agentes YA terminados.'
-        '· Claude: lee el cache de uso que la CLI deja en ~/.claude.json. No se refresca solo: corre /usage en Claude de vez en cuando.'
-        '· Codex: suma los tokens del dia desde las sesiones locales (~/.codex/sessions/<fecha>/*.jsonl) y, si el log los trae, muestra los limites de 5 hs / semanal.'
-        '· OpenCode: corre `opencode stats --days 0 --json` cada 60 segundos.'
-        '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Pueden devolver (todo opcional): sessions, prompts, steps, tokens {input, output, cache}, cost.'
-        '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, y el switch "Modo claro" para cambiar el tema; todo se guarda en config.json. Al final del popup esta la leyenda del autor.'
-        '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.'
+        (T 'ayuda_1')
+        (T 'ayuda_2')
+        (T 'ayuda_3')
+        (T 'ayuda_4')
+        (T 'ayuda_5')
+        (T 'ayuda_6')
+        (T 'ayuda_7')
     )
     foreach ($l in $lineas) {
         $panelAyuda.Children.Add((New-Texto $l 10 $colorTextoSecundario $false '0,3,0,3')) | Out-Null
@@ -1242,10 +1339,10 @@ function Refrescar-Ayuda {
 
 # ================= Menu de secciones (hamburguesa) =================
 $seccionesMenu = @(
-    @{ id = 'tasks'; nombre = 'Tareas' },
-    @{ id = 'claude'; nombre = 'Claude' },
-    @{ id = 'codex'; nombre = 'Codex' },
-    @{ id = 'opencode'; nombre = 'OpenCode' }
+    @{ id = 'tasks'; clave = 'sec_tasks' },
+    @{ id = 'claude'; clave = 'sec_claude' },
+    @{ id = 'codex'; clave = 'sec_codex' },
+    @{ id = 'opencode'; clave = 'sec_opencode' }
 )
 foreach ($prov in $config.customProviders) {
     if ($prov['id'] -and $prov['name']) {
@@ -1263,6 +1360,12 @@ $filaMenuHandler = {
         $config.theme = if ($config.theme -eq 'light') { 'dark' } else { 'light' }
         Guardar-Config
         Repintar-Tema
+    } elseif ($sid -eq 'language') {
+        # La fila de idioma tampoco es una seccion: alterna es <-> en y reetiqueta el chrome.
+        $script:idioma = if ($script:idioma -eq 'en') { 'es' } else { 'en' }
+        $config.language = $script:idioma
+        Guardar-Config
+        Reetiquetar-UI
     } else {
         $config.sections[$sid] = -not [bool]$config.sections[$sid]
         Guardar-Config
@@ -1286,12 +1389,14 @@ function New-FilaMenu($sec) {
 
     if ($sec.id -eq 'theme') {
         $activo = ($config.theme -eq 'light')
+    } elseif ($sec.id -eq 'language') {
+        $activo = ($script:idioma -eq 'en')
     } else {
         $activo = [bool]$config.sections[[string]$sec.id]
     }
 
     $nombre = New-Object System.Windows.Controls.TextBlock
-    $nombre.Text = $sec.nombre
+    if ($sec.clave) { $nombre.Text = (T $sec.clave) } else { $nombre.Text = $sec.nombre }
     $nombre.FontSize = 11
     $nombre.VerticalAlignment = 'Center'
     if ($activo) { $nombre.Foreground = New-Brush $colorTexto } else { $nombre.Foreground = New-Brush $colorTextoSecundario }
@@ -1328,10 +1433,12 @@ function Actualizar-Menu {
         $panelPopup.Children.Add((New-FilaMenu $sec)) | Out-Null
     }
     # Fila del tema, separada de las secciones (no prende/apaga nada: cambia la paleta).
-    $panelPopup.Children.Add((New-FilaMenu @{ id = 'theme'; nombre = 'Modo claro'; margen = '0,10,0,4' })) | Out-Null
+    $panelPopup.Children.Add((New-FilaMenu @{ id = 'theme'; clave = 'modo_claro'; margen = '0,10,0,4' })) | Out-Null
+    # Fila de idioma, debajo del tema: el switch prende el ingles (apagado = español).
+    $panelPopup.Children.Add((New-FilaMenu @{ id = 'language'; nombre = 'English'; margen = '0,2,0,4' })) | Out-Null
     $panelPopup.Children.Add((New-Separador)) | Out-Null
     $leyenda = New-Object System.Windows.Controls.TextBlock
-    $leyenda.Text = "Hecho por Luca Baello"
+    $leyenda.Text = (T 'leyenda')
     $leyenda.FontSize = 10
     $leyenda.Foreground = New-Brush $colorTextoSecundario
     $leyenda.HorizontalAlignment = 'Center'

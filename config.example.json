@@ -3,6 +3,7 @@
   "sections": { "tasks": true, "claude": true, "codex": true, "opencode": true },
   "showHelp": false,
   "theme": "dark",
+  "language": "auto",
   "opencodeCliPath": null,
   "opencodeRefreshSeconds": 60,
   "codexRefreshSeconds": 60,

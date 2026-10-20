@@ -5,3 +5,7 @@ config.json
 config.json.bak
 # Logs del modo captura (AI_PROGRESS_CAPTURE).
 *.log
+
+# Cache de Python (version Linux).
+__pycache__/
+*.pyc
