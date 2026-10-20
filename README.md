@@ -69,6 +69,10 @@ cambiar de ventana.
 
 - **Portable**: doble clic en `ai-progress.exe` (no abre consola). Es un lanzador chico: no hay
   que compilar nada.
+- **Sin dependencias**: `dist\ai-progress.exe` (~84 MB) trae el runtime de .NET y el motor de
+  PowerShell adentro: no hace falta tener PowerShell 7 instalado. Se compila con
+  `tools\standalone\build-standalone.ps1` y el paquete para compartir queda en
+  `dist\ai-progress-portable.zip`. Sus datos viven en `%LOCALAPPDATA%\ai-progress\runtime`.
 - **Instalador**: doble clic en `install.cmd` → copia todo a `%LOCALAPPDATA%\ai-progress`, crea el
   acceso directo del menú Inicio y te pregunta si querés arranque con Windows. Para desinstalar,
   `uninstall.ps1` (conserva `config.json` y `status.json`; con `-Todo` borra todo).
@@ -146,6 +150,7 @@ propio widget lo reescribe cuando usás el menú hamburguesa o el botón **?**.
   "theme": "dark",
   "language": "auto",
   "autostart": false,
+  "notifications": true,
   "opencodeCliPath": null,
   "opencodeRefreshSeconds": 60,
   "codexRefreshSeconds": 60,
@@ -202,10 +207,33 @@ python3 ai-progress-gtk.py
   se puede leer el contenido de la ventana).
 - `--lang es|en` y `--theme dark|light` fuerzan idioma y tema para esa ejecución.
 
+Instalación con entrada de menú y arranque al iniciar sesión:
+
+```bash
+./install.sh              # copia a ~/.local/share/ai-progress + entrada de menú
+./install.sh --autostart  # además arranca al iniciar sesión
+~/.local/share/ai-progress/uninstall.sh         # desinstala (conserva config/status)
+~/.local/share/ai-progress/uninstall.sh --todo  # borra todo
+```
+
+## Avisos
+
+El widget avisa con un cartel propio abajo a la derecha (Windows) o con una notificación de
+escritorio (Linux, vía `notify-send`) cuando:
+
+- una tarea pasa a **Listo**, y
+- el uso de Claude llega al **80%** (una sola vez por ventana de reset).
+
+En Windows no usa las notificaciones del sistema (muchas veces están apagadas o van al centro de
+notificaciones): es una ventanita del propio widget, arriba de todo, que se cierra sola a los 6 s
+o con un clic. Se apagan con `"notifications": false` en `config.json`.
+
 ## Desarrollo
 
 - `tools/build-icon.py` genera `assets/ai-progress.ico` y `.png` (requiere Pillow).
 - `tools/build-exe.ps1` compila `ai-progress.exe` con el `csc` que ya trae Windows.
+- `tools/standalone/build-standalone.ps1` compila el `.exe` autocontenido (requiere el SDK de .NET
+  8+ y NuGet la primera vez; salida en `dist/`, que no se versiona).
 
 ## Notas
 

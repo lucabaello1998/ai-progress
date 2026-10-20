@@ -9,3 +9,8 @@ config.json.bak
 # Cache de Python (version Linux).
 __pycache__/
 *.pyc
+dist/
+
+# Build del .exe autocontenido y del lanzador.
+tools/standalone/bin/
+tools/standalone/obj/

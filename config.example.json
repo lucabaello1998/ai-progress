@@ -5,6 +5,7 @@
   "theme": "dark",
   "language": "auto",
   "autostart": false,
+  "notifications": true,
   "opencodeCliPath": null,
   "opencodeRefreshSeconds": 60,
   "codexRefreshSeconds": 60,

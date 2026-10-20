@@ -46,9 +46,17 @@
 #
 # Basado en el widget claude-progress (para Claude Code), generalizado a IA en general.
 
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
+function Trace-Aip([string]$texto) {
+    if ($env:AI_PROGRESS_TRAZA) {
+        [System.IO.File]::AppendAllText($env:AI_PROGRESS_TRAZA, ((Get-Date).ToString('s') + ' ' + $texto + [Environment]::NewLine))
+    }
+}
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Trace-Aip 'inicio'
+Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Windows.Forms, System.Drawing
+Trace-Aip 'add-type ok'
+
+$scriptDir = if ($env:AI_PROGRESS_DIR) { $env:AI_PROGRESS_DIR } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 
 # Instancia unica: si ya hay un widget corriendo, este proceso sale sin abrir nada.
 # Los modos de prueba/captura lo saltean para poder correr en paralelo.
@@ -68,6 +76,7 @@ $config = @{
     theme                  = 'dark'
     language               = 'auto'
     autostart              = $false
+    notifications          = $true
     customProviders        = @()
 }
 # El -AsHashtable de pwsh devuelve mapas case-sensitive ("Theme" no matchea "theme"): normalizo
@@ -122,6 +131,7 @@ if (Test-Path $configPath) {
         if (@('dark', 'light') -contains [string]$cfg['theme']) { $config.theme = [string]$cfg['theme'] }
         if (@('auto', 'es', 'en') -contains [string]$cfg['language']) { $config.language = [string]$cfg['language'] }
         if ($null -ne $cfg['autostart']) { $config.autostart = [bool]$cfg['autostart'] }
+        if ($null -ne $cfg['notifications']) { $config.notifications = [bool]$cfg['notifications'] }
         if ($cfg['customProviders']) {
             $config.customProviders = @($cfg['customProviders'] | Where-Object { $_['id'] -and ($_['command'] -or $_['file']) })
         }
@@ -137,6 +147,12 @@ try {
     $valorAutostart = (Get-ItemProperty -Path $script:rutaAutostart -Name 'ai-progress' -ErrorAction SilentlyContinue).'ai-progress'
     $config.autostart = [bool]$valorAutostart
 } catch { }
+
+# Estado en memoria para los avisos: ultima tarea vista y ultima ventana de reset avisada.
+$script:tareasVistas = @{}
+$script:avisosUso = @{}
+$script:avisoVentana = $null
+Trace-Aip 'config ok'
 foreach ($prov in $config.customProviders) {
     $cid = 'custom:' + [string]$prov['id']
     if ($null -eq $config.sections[$cid]) { $config.sections[$cid] = $true }
@@ -213,6 +229,9 @@ $script:txt = @{
     ayuda_7           = @{ es = '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.'; en = '· Everything is local: the widget sends nothing to any API; it only reads files and runs already installed CLIs.' }
     modo_claro        = @{ es = 'Modo claro'; en = 'Light mode' }
     autostart         = @{ es = 'Iniciar con Windows'; en = 'Start with Windows' }
+    notif_tarea_titulo = @{ es = 'Tarea lista'; en = 'Task done' }
+    notif_uso_titulo  = @{ es = 'Uso alto'; en = 'High usage' }
+    notif_uso_texto   = @{ es = '{0}: {1}% de uso'; en = '{0}: {1}% used' }
     tray_mostrar      = @{ es = 'Mostrar/Ocultar'; en = 'Show/Hide' }
     tray_salir        = @{ es = 'Salir'; en = 'Quit' }
     leyenda           = @{ es = 'Hecho por Luca Baello'; en = 'Made by Luca Baello' }
@@ -445,6 +464,7 @@ function Guardar-Config {
             theme                  = [string]$config.theme
             language               = [string]$config.language
             autostart              = [bool]$config.autostart
+            notifications          = [bool]$config.notifications
             customProviders        = @($config.customProviders)
         }
         $salida = $obj
@@ -535,6 +555,7 @@ function Repintar-Tema {
 Aplicar-Tema
 
 # ================= Ventana =================
+Trace-Aip 'pre-ventana'
 $screen = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
 
 $window = New-Object System.Windows.Window
@@ -827,6 +848,69 @@ function Get-EtaMinutos([int]$esperados, [int]$completados, [double[]]$duracione
     return $etaEnVuelo + ($noIniciados * $promedio)
 }
 
+function Show-Aviso([string]$titulo, [string]$texto, [string]$tipo = 'Info') {
+    # Cartel propio (abajo a la derecha): no depende de las notificaciones de Windows, que
+    # muchas veces las tiene apagadas o las manda al centro de notificaciones.
+    if (-not $config.notifications) { return }
+    try {
+        if ($script:avisoVentana) {
+            $script:avisoVentana.Close()
+            $script:avisoVentana = $null
+        }
+        $aviso = New-Object System.Windows.Window
+        $aviso.WindowStyle = 'None'
+        $aviso.AllowsTransparency = $true
+        $aviso.Background = [System.Windows.Media.Brushes]::Transparent
+        $aviso.Topmost = $true
+        $aviso.ShowInTaskbar = $false
+        $aviso.SizeToContent = 'Height'
+        $aviso.Width = 320
+        $aviso.ShowActivated = $false
+
+        $borde = New-Object System.Windows.Controls.Border
+        $borde.Background = New-Brush $colorFondo
+        $borde.BorderBrush = New-Brush $(if ($tipo -eq 'Warning') { $colorDanger } else { $colorPrimario })
+        $borde.BorderThickness = 1
+        $borde.CornerRadius = 10
+        $borde.Padding = '14,10,14,10'
+
+        $pila = New-Object System.Windows.Controls.StackPanel
+        $tituloTexto = New-Object System.Windows.Controls.TextBlock
+        $tituloTexto.Text = $titulo
+        $tituloTexto.FontSize = 12
+        $tituloTexto.FontWeight = 'Bold'
+        $tituloTexto.Foreground = New-Brush $colorTexto
+        $detalleTexto = New-Object System.Windows.Controls.TextBlock
+        $detalleTexto.Text = $texto
+        $detalleTexto.FontSize = 11
+        $detalleTexto.Margin = '0,3,0,0'
+        $detalleTexto.TextWrapping = 'Wrap'
+        $detalleTexto.Foreground = New-Brush $colorTextoSecundario
+        $pila.Children.Add($tituloTexto) | Out-Null
+        $pila.Children.Add($detalleTexto) | Out-Null
+        $borde.Child = $pila
+        $aviso.Content = $borde
+        $aviso.Add_MouseLeftButtonUp({ $aviso.Close() })
+        $aviso.Add_Closed({ $script:avisoVentana = $null })
+        $aviso.Show()
+        $aviso.UpdateLayout()
+
+        $area = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        $aviso.Left = $area.Right - $aviso.ActualWidth - 24
+        $aviso.Top = $area.Bottom - $aviso.ActualHeight - 24
+        $script:avisoVentana = $aviso
+
+        # Se cierra solo a los 6 s; un clic tambien lo cierra.
+        $cerrarAviso = New-Object System.Windows.Threading.DispatcherTimer
+        $cerrarAviso.Interval = [TimeSpan]::FromSeconds(6)
+        $cerrarAviso.Add_Tick({
+            $cerrarAviso.Stop()
+            if ($script:avisoVentana) { $script:avisoVentana.Close() }
+        })
+        $cerrarAviso.Start()
+    } catch { }
+}
+
 function Refrescar-Tareas {
     $panelTareas.Children.Clear()
     Set-Visible $contTareas ([bool]$config.sections.tasks)
@@ -839,6 +923,17 @@ function Refrescar-Tareas {
             $datos = Read-ArchivoCompartido $ruta | ConvertFrom-Json -ErrorAction Stop
             if ($null -ne $datos -and $null -ne $datos.tasks) { $tareas += @($datos.tasks) }
         } catch { }
+    }
+
+    # Aviso cuando una tarea pasa a Listo (solo si ya la habiamos visto antes).
+    foreach ($tarea in $tareas) {
+        $idTarea = [string]$tarea.id
+        if (-not $idTarea) { continue }
+        $estadoTarea = [string]$tarea.status
+        if ($script:tareasVistas.ContainsKey($idTarea) -and $script:tareasVistas[$idTarea] -ne 'done' -and $estadoTarea -eq 'done') {
+            Show-Aviso (T 'notif_tarea_titulo') ([string]$tarea.name)
+        }
+        $script:tareasVistas[$idTarea] = $estadoTarea
     }
 
     $activas = @($tareas | Where-Object { $_.status -ne 'done' -and $_.status -ne 'error' }).Count
@@ -1049,12 +1144,31 @@ function New-FilaBarra($etiqueta, [int]$porcentaje, $reset, $color) {
     return $contenedor
 }
 
+function Avisar-Uso($uso) {
+    # Aviso por uso >= 80%, una sola vez por ventana de reset.
+    if ($null -eq $uso) { return }
+    foreach ($par in @(
+        @{ clave = '5h'; nombre = (T 'sesion_5h'); pct = [int]$uso.CincoHorasPorcentaje; reset = [string]$uso.CincoHorasReset },
+        @{ clave = '7d'; nombre = (T 'semanal_7d'); pct = [int]$uso.SieteDiasPorcentaje; reset = [string]$uso.SieteDiasReset }
+    )) {
+        if ($par.pct -ge 80) {
+            if ($script:avisosUso[$par.clave] -ne $par.reset) {
+                Show-Aviso (T 'notif_uso_titulo') (TF 'notif_uso_texto' @($par.nombre, $par.pct)) 'Warning'
+                $script:avisosUso[$par.clave] = $par.reset
+            }
+        } else {
+            $script:avisosUso[$par.clave] = $null
+        }
+    }
+}
+
 function Refrescar-UsoClaude {
     $panelClaude.Children.Clear()
     Set-Visible $contClaude ([bool]$config.sections.claude)
     if (-not $config.sections.claude) { return }
 
     $uso = Get-UsoClaudeGeneral
+    Avisar-Uso $uso
 
     # Dos edades distintas: (a) cuando leyo ESTE script, (b) que tan vieja es la foto que la
     # propia CLI guardo (puede quedar minutos atras de lo que muestra el chat).
@@ -1396,6 +1510,7 @@ foreach ($prov in $config.customProviders) {
 
 function Get-ComandoAutostart {
     # Preferentemente el .exe (sin consola); si no esta, el launch.vbs de siempre.
+    if ($env:AI_PROGRESS_EXE -and (Test-Path $env:AI_PROGRESS_EXE)) { return '"' + $env:AI_PROGRESS_EXE + '"' }
     $exe = Join-Path $scriptDir 'ai-progress.exe'
     if (Test-Path $exe) { return '"' + $exe + '"' }
     return 'wscript.exe "' + (Join-Path $scriptDir 'launch.vbs') + '"'
@@ -1642,4 +1757,5 @@ if ($iconoBandeja -and -not $env:AI_PROGRESS_CAPTURE -and -not $env:AI_PROGRESS_
 }
 
 $window.Show() | Out-Null
+Trace-Aip 'show ok'
 [System.Windows.Threading.Dispatcher]::Run()
