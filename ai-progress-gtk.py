@@ -99,7 +99,7 @@ TXT = {
                 'en': '· OpenCode: runs `opencode stats --days 0 --json` every 60 seconds.'},
     'ayuda_5': {'es': '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Pueden devolver (todo opcional): sessions, prompts, steps, tokens {input, output, cache}, cost.',
                 'en': '· Other models: add them in config.json -> customProviders, with a CLI command (command + args) or a JSON file (file). They can return (all optional): sessions, prompts, steps, tokens {input, output, cache}, cost.'},
-    'ayuda_6': {'es': '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, el switch "Modo claro" para cambiar el tema y el switch "English" para pasar la interfaz a ingles; todo se guarda en config.json. Al final del popup esta la leyenda del autor.',
+    'ayuda_6': {'es': '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, el switch "Modo claro" para cambiar el tema y el switch "Español/English" para pasar la interfaz a ingles; todo se guarda en config.json. Al final del popup esta la leyenda del autor.',
                 'en': '· The hamburger menu above (right side) opens a popup with switches to turn each section on/off, the "Light mode" switch to change the theme and the language switch to switch between Spanish and English; everything is saved in config.json. The author credit is at the bottom of the popup.'},
     'ayuda_7': {'es': '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.',
                 'en': '· Everything is local: the widget sends nothing to any API; it only reads files and runs already installed CLIs.'},
@@ -1103,7 +1103,7 @@ class Widget:
             caja.pack_start(self.fila_menu(sid, nombre, bool(self.cfg['sections'].get(sid, True))), False, False, 2)
         caja.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 8)
         caja.pack_start(self.fila_menu('theme', T('modo_claro'), self.cfg['theme'] == 'light'), False, False, 2)
-        caja.pack_start(self.fila_menu('language', 'English', IDIOMA == 'en'), False, False, 2)
+        caja.pack_start(self.fila_menu('language', 'Español/English', IDIOMA == 'en'), False, False, 2)
         caja.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 8)
         leyenda = Gtk.Label(label=T('leyenda'))
         leyenda.get_style_context().add_class('dimchico')

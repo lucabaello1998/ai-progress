@@ -194,7 +194,7 @@ $script:txt = @{
     ayuda_3           = @{ es = '· Codex: suma los tokens del dia desde las sesiones locales (~/.codex/sessions/<fecha>/*.jsonl) y, si el log los trae, muestra los limites de 5 hs / semanal.'; en = '· Codex: adds up today tokens from local sessions (~/.codex/sessions/<date>/*.jsonl) and, if the log includes them, shows the 5 h / weekly limits.' }
     ayuda_4           = @{ es = '· OpenCode: corre `opencode stats --days 0 --json` cada 60 segundos.'; en = '· OpenCode: runs `opencode stats --days 0 --json` every 60 seconds.' }
     ayuda_5           = @{ es = '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Pueden devolver (todo opcional): sessions, prompts, steps, tokens {input, output, cache}, cost.'; en = '· Other models: add them in config.json -> customProviders, with a CLI command (command + args) or a JSON file (file). They can return (all optional): sessions, prompts, steps, tokens {input, output, cache}, cost.' }
-    ayuda_6           = @{ es = '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, el switch "Modo claro" para cambiar el tema y el switch "English" para pasar la interfaz a ingles; todo se guarda en config.json. Al final del popup esta la leyenda del autor.'; en = '· The hamburger menu above (right side) opens a popup with switches to turn each section on/off, the "Light mode" switch to change the theme and the language switch to switch between Spanish and English; everything is saved in config.json. The author credit is at the bottom of the popup.' }
+    ayuda_6           = @{ es = '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, el switch "Modo claro" para cambiar el tema y el switch "Español/English" para pasar la interfaz a ingles; todo se guarda en config.json. Al final del popup esta la leyenda del autor.'; en = '· The hamburger menu above (right side) opens a popup with switches to turn each section on/off, the "Light mode" switch to change the theme and the language switch to switch between Spanish and English; everything is saved in config.json. The author credit is at the bottom of the popup.' }
     ayuda_7           = @{ es = '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.'; en = '· Everything is local: the widget sends nothing to any API; it only reads files and runs already installed CLIs.' }
     modo_claro        = @{ es = 'Modo claro'; en = 'Light mode' }
     leyenda           = @{ es = 'Hecho por Luca Baello'; en = 'Made by Luca Baello' }
@@ -1460,7 +1460,7 @@ function Actualizar-Menu {
     # Fila del tema, separada de las secciones (no prende/apaga nada: cambia la paleta).
     $panelPopup.Children.Add((New-FilaMenu @{ id = 'theme'; clave = 'modo_claro'; margen = '0,10,0,4' })) | Out-Null
     # Fila de idioma, debajo del tema: el switch prende el ingles (apagado = español).
-    $panelPopup.Children.Add((New-FilaMenu @{ id = 'language'; nombre = 'English'; margen = '0,2,0,4' })) | Out-Null
+    $panelPopup.Children.Add((New-FilaMenu @{ id = 'language'; nombre = 'Español/English'; margen = '0,2,0,4' })) | Out-Null
     $panelPopup.Children.Add((New-Separador)) | Out-Null
     $leyenda = New-Object System.Windows.Controls.TextBlock
     $leyenda.Text = (T 'leyenda')

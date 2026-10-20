@@ -16,7 +16,7 @@ Widget flotante para **Windows y Linux** que muestra, siempre visible arriba a l
 
 El **menú hamburguesa** (arriba a la derecha) abre un **popup flotante** — con fondo y borde
 propios, no empuja el contenido — con *switchs* para prender/apagar cada sección, el switch **Modo claro**
-(tema claro/oscuro) y el switch **English** (idioma de la interfaz); todo se guarda en `config.json`.
+(tema claro/oscuro) y el switch **Español/English** (idioma de la interfaz); todo se guarda en `config.json`.
 El botón **?** muestra la explicación de cómo funciona dentro del propio widget, y al pie del popup
 está la leyenda del autor.
 
@@ -34,7 +34,7 @@ Modo claro (switch **Modo claro** del menú):
 
 ![modo claro](docs/screenshot-claro.png)
 
-En inglés (switch **English** del menú):
+En inglés (switch **Español/English** del menú):
 
 ![interfaz en inglés](docs/screenshot-en.png)
 
@@ -115,7 +115,7 @@ La interfaz está en **español e inglés**. Se elige con `language` en `config.
   cualquier otro caso.
 - `"es"` / `"en"`: fija el idioma.
 
-El switch **English** del menú lo cambia en caliente y lo guarda (`es`/`en`). Para volver a `auto`,
+El switch **Español/English** del menú lo cambia en caliente y lo guarda (`es`/`en`). Para volver a `auto`,
 editá `config.json`. En la versión Linux también se puede forzar con `--lang en` sin tocar el archivo.
 
 ## Configuración (`config.json`)
