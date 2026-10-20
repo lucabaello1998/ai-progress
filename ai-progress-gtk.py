@@ -33,6 +33,7 @@ DIR_SCRIPT = os.path.dirname(os.path.abspath(__file__))
 RUTA_CONFIG_DEFECTO = os.path.join(DIR_SCRIPT, 'config.json')
 RUTA_CLAUDE = os.path.join(os.path.expanduser('~'), '.claude.json')
 DIR_CODEX = os.path.join(os.path.expanduser('~'), '.codex', 'sessions')
+RUTA_AUTOSTART = os.path.join(os.path.expanduser('~'), '.config', 'autostart', 'ai-progress.desktop')
 
 # ---------- Textos (es | en) ----------
 TXT = {
@@ -99,11 +100,15 @@ TXT = {
                 'en': '· OpenCode: runs `opencode stats --days 0 --json` every 60 seconds.'},
     'ayuda_5': {'es': '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Pueden devolver (todo opcional): sessions, prompts, steps, tokens {input, output, cache}, cost.',
                 'en': '· Other models: add them in config.json -> customProviders, with a CLI command (command + args) or a JSON file (file). They can return (all optional): sessions, prompts, steps, tokens {input, output, cache}, cost.'},
-    'ayuda_6': {'es': '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, el switch "Modo claro" para cambiar el tema y el switch "Español/English" para pasar la interfaz a ingles; todo se guarda en config.json. Al final del popup esta la leyenda del autor.',
-                'en': '· The hamburger menu above (right side) opens a popup with switches to turn each section on/off, the "Light mode" switch to change the theme and the language switch to switch between Spanish and English; everything is saved in config.json. The author credit is at the bottom of the popup.'},
+    'ayuda_6': {'es': '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, el switch "Modo claro" para cambiar el tema, el switch "Español/English" para pasar la interfaz a ingles y el switch "Iniciar con el sistema" para que arranque al iniciar sesion; todo se guarda en config.json. Al final del popup esta la leyenda del autor.',
+                'en': '· The hamburger menu above (right side) opens a popup with switches to turn each section on/off, the "Light mode" switch to change the theme, the language switch to switch between Spanish and English and the "Start on login" switch to launch it at login; everything is saved in config.json. The author credit is at the bottom of the popup.'},
     'ayuda_7': {'es': '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.',
                 'en': '· Everything is local: the widget sends nothing to any API; it only reads files and runs already installed CLIs.'},
     'modo_claro': {'es': 'Modo claro', 'en': 'Light mode'},
+    'autostart': {'es': 'Iniciar con el sistema', 'en': 'Start on login'},
+    'notif_tarea_titulo': {'es': 'Tarea lista', 'en': 'Task done'},
+    'notif_uso_titulo': {'es': 'Uso alto', 'en': 'High usage'},
+    'notif_uso_texto': {'es': '{0}: {1}% de uso', 'en': '{0}: {1}% used'},
     'leyenda': {'es': 'Hecho por Luca Baello', 'en': 'Made by Luca Baello'},
 }
 
@@ -132,6 +137,8 @@ def config_defecto():
         'showHelp': False,
         'theme': 'dark',
         'language': 'auto',
+        'autostart': False,
+        'notifications': True,
         'customProviders': [],
     }
 
@@ -146,6 +153,8 @@ def _entero(valor, defecto):
 
 def cargar_config(ruta):
     cfg = config_defecto()
+    # El archivo de autostart manda (igual que la clave de registro en Windows).
+    cfg['autostart'] = autostart_activo()
     try:
         with open(ruta, 'r', encoding='utf-8-sig') as f:
             datos = json.load(f)
@@ -182,6 +191,8 @@ def cargar_config(ruta):
         cfg['theme'] = str(datos['theme']).lower()
     if str(datos.get('language')).lower() in ('auto', 'es', 'en'):
         cfg['language'] = str(datos['language']).lower()
+    if datos.get('notifications') is not None:
+        cfg['notifications'] = bool(datos['notifications'])
     if isinstance(datos.get('customProviders'), list):
         cfg['customProviders'] = [
             p for p in datos['customProviders']
@@ -204,7 +215,8 @@ def guardar_config(cfg, ruta):
     except Exception:
         salida = {}
     claves = ('statusPaths', 'opencodeCliPath', 'opencodeRefreshSeconds', 'codexRefreshSeconds',
-              'sections', 'showHelp', 'theme', 'language', 'customProviders')
+              'sections', 'showHelp', 'theme', 'language', 'autostart', 'notifications',
+              'customProviders')
     for clave in claves:
         for existente in [k for k in salida if str(k).lower() == clave.lower()]:
             del salida[existente]
@@ -214,6 +226,45 @@ def guardar_config(cfg, ruta):
             os.makedirs(os.path.dirname(ruta), exist_ok=True)
         with open(ruta, 'w', encoding='utf-8') as f:
             json.dump(salida, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def autostart_activo():
+    return os.path.isfile(RUTA_AUTOSTART)
+
+
+def escribir_autostart(activo):
+    """Crea o borra ~/.config/autostart/ai-progress.desktop (arranque al iniciar sesion)."""
+    try:
+        if activo:
+            os.makedirs(os.path.dirname(RUTA_AUTOSTART), exist_ok=True)
+            script = os.path.abspath(__file__)
+            texto = (
+                '[Desktop Entry]\n'
+                'Type=Application\n'
+                'Name=ai-progress\n'
+                'Comment=Progreso de agentes de IA\n'
+                'Exec=/usr/bin/env python3 "%s"\n'
+                'Terminal=false\n'
+                'X-GNOME-Autostart-enabled=true\n' % script
+            )
+            with open(RUTA_AUTOSTART, 'w', encoding='utf-8') as archivo:
+                archivo.write(texto)
+        elif os.path.isfile(RUTA_AUTOSTART):
+            os.remove(RUTA_AUTOSTART)
+        return True
+    except OSError:
+        return False
+
+
+def notificar(titulo, texto):
+    """Aviso de escritorio via notify-send; si no esta, no pasa nada."""
+    if not shutil.which('notify-send'):
+        return
+    try:
+        subprocess.Popen(['notify-send', '-a', 'ai-progress', '-i', 'ai-progress', titulo, texto],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
@@ -945,6 +996,8 @@ class Widget:
         self.captura = captura
         self.cache = {}
         self.barras_indef = []
+        self.estado_tareas = {}
+        self.avisos_uso = {}
         self.proveedor_css = Gtk.CssProvider()
         # Se registra una sola vez; cambiar de tema solo recarga el CSS.
         Gtk.StyleContext.add_provider_for_screen(
@@ -960,6 +1013,12 @@ class Widget:
         self.ventana.set_title(T('titulo'))
         self.ventana.set_size_request(380, -1)
         self.ventana.set_name('ventana')
+        try:
+            icono = os.path.join(DIR_SCRIPT, 'assets', 'ai-progress.png')
+            if os.path.isfile(icono):
+                self.ventana.set_icon_from_file(icono)
+        except Exception:
+            pass
         try:
             pantalla = self.ventana.get_screen()
             visual = pantalla.get_rgba_visual()
@@ -1104,6 +1163,7 @@ class Widget:
         caja.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 8)
         caja.pack_start(self.fila_menu('theme', T('modo_claro'), self.cfg['theme'] == 'light'), False, False, 2)
         caja.pack_start(self.fila_menu('language', 'Español/English', IDIOMA == 'en'), False, False, 2)
+        caja.pack_start(self.fila_menu('autostart', T('autostart'), bool(self.cfg.get('autostart'))), False, False, 2)
         caja.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 8)
         leyenda = Gtk.Label(label=T('leyenda'))
         leyenda.get_style_context().add_class('dimchico')
@@ -1146,6 +1206,10 @@ class Widget:
             self.ventana.set_title(T('titulo'))
             self.titulo.set_text(T('titulo'))
             reetiquetar = True
+        elif sid == 'autostart':
+            # Arranque al iniciar sesion via ~/.config/autostart.
+            if escribir_autostart(estado):
+                self.cfg['autostart'] = bool(estado)
         else:
             self.cfg['sections'][sid] = bool(estado)
         guardar_config(self.cfg, self.ruta_cfg)
@@ -1282,8 +1346,41 @@ class Widget:
             self.render_seccion(custom, es_custom=True)
         if modelo['ayuda']['visible']:
             self.render_seccion(modelo['ayuda'], separador=False)
+        self.avisar()
         self.ventana.queue_resize()
         self.ventana.show_all()
+
+    def avisar(self):
+        # Avisos: tarea que pasa a Listo y uso de Claude >= 80% (una vez por ventana de reset).
+        if not self.cfg.get('notifications', True):
+            return
+        try:
+            tareas = leer_status(self.cfg['statusPaths'])
+        except Exception:
+            tareas = []
+        for tarea in tareas:
+            tid = str(tarea.get('id') or '')
+            if not tid:
+                continue
+            estado = str(tarea.get('status') or '')
+            previo = self.estado_tareas.get(tid)
+            if previo and previo != 'done' and estado == 'done':
+                notificar(T('notif_tarea_titulo'), str(tarea.get('name') or ''))
+            self.estado_tareas[tid] = estado
+        if self.cfg['sections'].get('claude', True):
+            uso = get_uso_claude()
+            if uso:
+                for clave, nombre, pct, reset in (
+                        ('5h', T('sesion_5h'), uso.get('cinco_pct'), uso.get('cinco_reset')),
+                        ('7d', T('semanal_7d'), uso.get('siete_pct'), uso.get('siete_reset'))):
+                    if pct is None:
+                        continue
+                    if pct >= 80:
+                        if self.avisos_uso.get(clave) != reset:
+                            notificar(T('notif_uso_titulo'), TF('notif_uso_texto', nombre, pct))
+                            self.avisos_uso[clave] = reset
+                    else:
+                        self.avisos_uso[clave] = None
 
     def pulsar(self):
         for barra in list(self.barras_indef):
