@@ -65,9 +65,23 @@ cambiar de ventana.
   trae OpenCode Desktop) para la sección de OpenCode. La de Codex funciona con solo tener sus
   logs locales.
 
+## Instalación (Windows)
+
+- **Portable**: doble clic en `ai-progress.exe` (no abre consola). Es un lanzador chico: no hay
+  que compilar nada.
+- **Instalador**: doble clic en `install.cmd` → copia todo a `%LOCALAPPDATA%\ai-progress`, crea el
+  acceso directo del menú Inicio y te pregunta si querés arranque con Windows. Para desinstalar,
+  `uninstall.ps1` (conserva `config.json` y `status.json`; con `-Todo` borra todo).
+
+En los dos casos hace falta **PowerShell 7**: `winget install Microsoft.PowerShell`.
+
+El widget es de **instancia única** (abrirlo dos veces no duplica nada), tiene ícono en la
+**bandeja** (doble clic muestra/oculta; clic derecho → Mostrar/Ocultar o Salir) y el switch
+**Iniciar con Windows** del menú prende/apaga el arranque automático.
+
 ## Uso
 
-- **Windows**: doble clic en `launch.vbs` (no abre consola).
+- **Windows**: `ai-progress.exe` (o `launch.vbs`, que hace lo mismo con `wscript`).
 - **Windows** desde consola: `pwsh -NoProfile -ExecutionPolicy Bypass -File .\ai-progress.ps1`.
 - **Linux**: `python3 ai-progress-gtk.py` (ver [Linux (GTK3)](#linux-gtk3)).
 
@@ -131,6 +145,7 @@ propio widget lo reescribe cuando usás el menú hamburguesa o el botón **?**.
   "showHelp": false,
   "theme": "dark",
   "language": "auto",
+  "autostart": false,
   "opencodeCliPath": null,
   "opencodeRefreshSeconds": 60,
   "codexRefreshSeconds": 60,
@@ -186,6 +201,11 @@ python3 ai-progress-gtk.py
 - `--screenshot salida.png` se autofotografía y cierra (documentación; necesita X11: en Wayland no
   se puede leer el contenido de la ventana).
 - `--lang es|en` y `--theme dark|light` fuerzan idioma y tema para esa ejecución.
+
+## Desarrollo
+
+- `tools/build-icon.py` genera `assets/ai-progress.ico` y `.png` (requiere Pillow).
+- `tools/build-exe.ps1` compila `ai-progress.exe` con el `csc` que ya trae Windows.
 
 ## Notas
 

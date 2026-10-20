@@ -50,6 +50,13 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+# Instancia unica: si ya hay un widget corriendo, este proceso sale sin abrir nada.
+# Los modos de prueba/captura lo saltean para poder correr en paralelo.
+if (-not ($env:AI_PROGRESS_CAPTURE -or $env:AI_PROGRESS_SELFTEST -or $env:AI_PROGRESS_ALLOW_MULTI)) {
+    $mutexWidget = New-Object System.Threading.Mutex($false, 'Local\ai-progress-widget')
+    if (-not $mutexWidget.WaitOne(0)) { exit 0 }
+}
+
 # ---------- Config ----------
 $config = @{
     statusPaths            = @((Join-Path $scriptDir 'status.json'))
@@ -60,6 +67,7 @@ $config = @{
     showHelp               = $false
     theme                  = 'dark'
     language               = 'auto'
+    autostart              = $false
     customProviders        = @()
 }
 # El -AsHashtable de pwsh devuelve mapas case-sensitive ("Theme" no matchea "theme"): normalizo
@@ -113,6 +121,7 @@ if (Test-Path $configPath) {
         if ($null -ne $cfg['showHelp']) { $config.showHelp = [bool]$cfg['showHelp'] }
         if (@('dark', 'light') -contains [string]$cfg['theme']) { $config.theme = [string]$cfg['theme'] }
         if (@('auto', 'es', 'en') -contains [string]$cfg['language']) { $config.language = [string]$cfg['language'] }
+        if ($null -ne $cfg['autostart']) { $config.autostart = [bool]$cfg['autostart'] }
         if ($cfg['customProviders']) {
             $config.customProviders = @($cfg['customProviders'] | Where-Object { $_['id'] -and ($_['command'] -or $_['file']) })
         }
@@ -122,6 +131,12 @@ if (Test-Path $configPath) {
         try { Copy-Item -LiteralPath $configPath -Destination ($configPath + '.bak') -Force } catch { }
     }
 }
+# El autostart real manda: si la clave de Windows existe, el switch arranca prendido.
+$script:rutaAutostart = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+try {
+    $valorAutostart = (Get-ItemProperty -Path $script:rutaAutostart -Name 'ai-progress' -ErrorAction SilentlyContinue).'ai-progress'
+    $config.autostart = [bool]$valorAutostart
+} catch { }
 foreach ($prov in $config.customProviders) {
     $cid = 'custom:' + [string]$prov['id']
     if ($null -eq $config.sections[$cid]) { $config.sections[$cid] = $true }
@@ -194,9 +209,12 @@ $script:txt = @{
     ayuda_3           = @{ es = '· Codex: suma los tokens del dia desde las sesiones locales (~/.codex/sessions/<fecha>/*.jsonl) y, si el log los trae, muestra los limites de 5 hs / semanal.'; en = '· Codex: adds up today tokens from local sessions (~/.codex/sessions/<date>/*.jsonl) and, if the log includes them, shows the 5 h / weekly limits.' }
     ayuda_4           = @{ es = '· OpenCode: corre `opencode stats --days 0 --json` cada 60 segundos.'; en = '· OpenCode: runs `opencode stats --days 0 --json` every 60 seconds.' }
     ayuda_5           = @{ es = '· Otros modelos: se agregan en config.json -> customProviders, con un comando CLI (command + args) o un archivo JSON (file). Pueden devolver (todo opcional): sessions, prompts, steps, tokens {input, output, cache}, cost.'; en = '· Other models: add them in config.json -> customProviders, with a CLI command (command + args) or a JSON file (file). They can return (all optional): sessions, prompts, steps, tokens {input, output, cache}, cost.' }
-    ayuda_6           = @{ es = '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, el switch "Modo claro" para cambiar el tema y el switch "Español/English" para pasar la interfaz a ingles; todo se guarda en config.json. Al final del popup esta la leyenda del autor.'; en = '· The hamburger menu above (right side) opens a popup with switches to turn each section on/off, the "Light mode" switch to change the theme and the language switch to switch between Spanish and English; everything is saved in config.json. The author credit is at the bottom of the popup.' }
+    ayuda_6           = @{ es = '· El menu hamburguesa de arriba (a la derecha) abre un popup con switchs para prender y apagar cada seccion, el switch "Modo claro" para cambiar el tema, el switch "Español/English" para pasar la interfaz a ingles y el switch "Iniciar con Windows" para que arranque solo; todo se guarda en config.json. Al final del popup esta la leyenda del autor.'; en = '· The hamburger menu above (right side) opens a popup with switches to turn each section on/off, the "Light mode" switch to change the theme, the language switch to switch between Spanish and English and the "Start with Windows" switch to launch it automatically; everything is saved in config.json. The author credit is at the bottom of the popup.' }
     ayuda_7           = @{ es = '· Todo es local: el widget no manda nada a ninguna API; solo lee archivos y corre CLIs ya instalados.'; en = '· Everything is local: the widget sends nothing to any API; it only reads files and runs already installed CLIs.' }
     modo_claro        = @{ es = 'Modo claro'; en = 'Light mode' }
+    autostart         = @{ es = 'Iniciar con Windows'; en = 'Start with Windows' }
+    tray_mostrar      = @{ es = 'Mostrar/Ocultar'; en = 'Show/Hide' }
+    tray_salir        = @{ es = 'Salir'; en = 'Quit' }
     leyenda           = @{ es = 'Hecho por Luca Baello'; en = 'Made by Luca Baello' }
 }
 
@@ -426,6 +444,7 @@ function Guardar-Config {
             showHelp               = [bool]$config.showHelp
             theme                  = [string]$config.theme
             language               = [string]$config.language
+            autostart              = [bool]$config.autostart
             customProviders        = @($config.customProviders)
         }
         $salida = $obj
@@ -1375,6 +1394,27 @@ foreach ($prov in $config.customProviders) {
     }
 }
 
+function Get-ComandoAutostart {
+    # Preferentemente el .exe (sin consola); si no esta, el launch.vbs de siempre.
+    $exe = Join-Path $scriptDir 'ai-progress.exe'
+    if (Test-Path $exe) { return '"' + $exe + '"' }
+    return 'wscript.exe "' + (Join-Path $scriptDir 'launch.vbs') + '"'
+}
+
+function Set-Autostart([bool]$activo) {
+    try {
+        if ($activo) {
+            if (-not (Test-Path $script:rutaAutostart)) { New-Item -Path $script:rutaAutostart -Force | Out-Null }
+            Set-ItemProperty -Path $script:rutaAutostart -Name 'ai-progress' -Value (Get-ComandoAutostart)
+        } else {
+            Remove-ItemProperty -Path $script:rutaAutostart -Name 'ai-progress' -ErrorAction SilentlyContinue
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 # El handler lee el id desde el Tag de la fila: un scriptblock por fila capturaria mal la
 # variable del loop (en PowerShell los closures comparten la variable del foreach).
 $filaMenuHandler = {
@@ -1391,6 +1431,11 @@ $filaMenuHandler = {
         $config.language = $script:idioma
         Guardar-Config
         Reetiquetar-UI
+    } elseif ($sid -eq 'autostart') {
+        # Arranque con Windows (HKCU\...\Run): si falla, el switch no cambia.
+        $nuevo = -not [bool]$config.autostart
+        if (Set-Autostart $nuevo) { $config.autostart = $nuevo }
+        Guardar-Config
     } else {
         $config.sections[$sid] = -not [bool]$config.sections[$sid]
         Guardar-Config
@@ -1416,6 +1461,8 @@ function New-FilaMenu($sec) {
         $activo = ($config.theme -eq 'light')
     } elseif ($sec.id -eq 'language') {
         $activo = ($script:idioma -eq 'en')
+    } elseif ($sec.id -eq 'autostart') {
+        $activo = [bool]$config.autostart
     } else {
         $activo = [bool]$config.sections[[string]$sec.id]
     }
@@ -1461,6 +1508,8 @@ function Actualizar-Menu {
     $panelPopup.Children.Add((New-FilaMenu @{ id = 'theme'; clave = 'modo_claro'; margen = '0,10,0,4' })) | Out-Null
     # Fila de idioma, debajo del tema: el switch prende el ingles (apagado = español).
     $panelPopup.Children.Add((New-FilaMenu @{ id = 'language'; nombre = 'Español/English'; margen = '0,2,0,4' })) | Out-Null
+    # Arranque con Windows.
+    $panelPopup.Children.Add((New-FilaMenu @{ id = 'autostart'; clave = 'autostart'; margen = '0,2,0,4' })) | Out-Null
     $panelPopup.Children.Add((New-Separador)) | Out-Null
     $leyenda = New-Object System.Windows.Controls.TextBlock
     $leyenda.Text = (T 'leyenda')
@@ -1513,6 +1562,11 @@ if ($env:AI_PROGRESS_CAPTURE_MENU) {
 
 $window.Add_Closed({
     $timer.Stop()
+    if ($script:bandeja) {
+        $script:bandeja.Visible = $false
+        $script:bandeja.Dispose()
+        $script:bandeja = $null
+    }
     # Sin una Application WPF, cerrar la ventana no termina el dispatcher: se apaga a mano
     # para que el proceso salga limpio (si no, queda un pwsh invisible vivo).
     [System.Windows.Threading.Dispatcher]::CurrentDispatcher.InvokeShutdown()
@@ -1548,6 +1602,43 @@ if ($env:AI_PROGRESS_CAPTURE) {
         $window.Close()
     })
     $captura.Start()
+}
+
+# Icono de la ventana y de la bandeja (assets/ai-progress.ico).
+$iconoBandeja = $null
+$rutaIcono = Join-Path $scriptDir 'assets\ai-progress.ico'
+if (Test-Path $rutaIcono) {
+    try {
+        $iconoBandeja = New-Object System.Drawing.Icon($rutaIcono)
+        $window.Icon = [System.Windows.Interop.Imaging]::CreateBitmapSourceFromHIcon(
+            $iconoBandeja.Handle,
+            [System.Windows.Int32Rect]::Empty,
+            [System.Windows.Media.Imaging.BitmapSizeOptions]::FromEmptyOptions())
+    } catch { }
+}
+
+# Bandeja: doble clic muestra/oculta; menu con Mostrar/Ocultar y Salir.
+if ($iconoBandeja -and -not $env:AI_PROGRESS_CAPTURE -and -not $env:AI_PROGRESS_SELFTEST) {
+    $bandeja = New-Object System.Windows.Forms.NotifyIcon
+    $bandeja.Icon = $iconoBandeja
+    $bandeja.Text = 'ai-progress'
+    $menuBandeja = New-Object System.Windows.Forms.ContextMenuStrip
+    $itemMostrar = New-Object System.Windows.Forms.ToolStripMenuItem
+    $itemMostrar.Text = (T 'tray_mostrar')
+    $itemMostrar.Add_Click({
+        if ($window.IsVisible) { $window.Hide() } else { $window.Show(); $window.Activate() }
+    })
+    $itemSalir = New-Object System.Windows.Forms.ToolStripMenuItem
+    $itemSalir.Text = (T 'tray_salir')
+    $itemSalir.Add_Click({ $window.Close() })
+    [void]$menuBandeja.Items.Add($itemMostrar)
+    [void]$menuBandeja.Items.Add($itemSalir)
+    $bandeja.ContextMenuStrip = $menuBandeja
+    $bandeja.Add_DoubleClick({
+        if ($window.IsVisible) { $window.Hide() } else { $window.Show(); $window.Activate() }
+    })
+    $bandeja.Visible = $true
+    $script:bandeja = $bandeja
 }
 
 $window.Show() | Out-Null

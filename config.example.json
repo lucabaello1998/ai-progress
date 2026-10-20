@@ -4,6 +4,7 @@
   "showHelp": false,
   "theme": "dark",
   "language": "auto",
+  "autostart": false,
   "opencodeCliPath": null,
   "opencodeRefreshSeconds": 60,
   "codexRefreshSeconds": 60,
