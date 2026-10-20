@@ -87,7 +87,14 @@ if (Test-Path $configPath) {
         $cfg = Convertir-MapaCI $cfg
         if ($cfg['statusPaths']) {
             $config.statusPaths = @($cfg['statusPaths'] | ForEach-Object {
-                if ([System.IO.Path]::IsPathRooted([string]$_)) { [string]$_ } else { Join-Path $scriptDir ([string]$_) }
+                $ruta = [string]$_
+                if (-not [System.IO.Path]::IsPathRooted($ruta)) {
+                    $ruta = Join-Path $scriptDir $ruta
+                } elseif (-not (Test-Path -LiteralPath $ruta) -and $ruta -match '^/mnt/([A-Za-z])/(.*)$') {
+                    # Config escrita desde Linux/WSL: se traduce /mnt/c/... a C:\...
+                    $ruta = $matches[1].ToUpper() + ':\' + ($matches[2] -replace '/', '\')
+                }
+                $ruta
             })
         }
         if ($cfg['opencodeCliPath']) { $config.opencodeCliPath = [string]$cfg['opencodeCliPath'] }
@@ -139,6 +146,7 @@ $script:txt = @{
     sec_codex         = @{ es = 'Codex'; en = 'Codex' }
     sec_opencode      = @{ es = 'OpenCode'; en = 'OpenCode' }
     activas           = @{ es = '{0} activas'; en = '{0} active' }
+    activa1           = @{ es = '1 activa'; en = '1 active' }
     sin_tareas        = @{ es = 'Sin tareas en curso.'; en = 'No tasks running.' }
     listo             = @{ es = 'Listo'; en = 'Done' }
     error             = @{ es = 'Error'; en = 'Error' }
@@ -178,7 +186,6 @@ $script:txt = @{
     opencode_sin_cli  = @{ es = 'Sin datos: no encontre el CLI de OpenCode (config.json -> opencodeCliPath) o el servicio no responde.'; en = 'No data: OpenCode CLI not found (config.json -> opencodeCliPath) or the service is not responding.' }
     uso_prov          = @{ es = 'Uso - {0} (hoy)'; en = 'Usage - {0} (today)' }
     prov_sin_datos    = @{ es = 'Sin datos: revisa command/file y args del proveedor en config.json.'; en = 'No data: check the provider command/file and args in config.json.' }
-    prov_detalle      = @{ es = '{0} sesiones - {1} prompts - {2} pasos'; en = '{0} sessions - {1} prompts - {2} steps' }
     costo             = @{ es = 'Costo: $ {0}'; en = 'Cost: $ {0}' }
     sin_metricas      = @{ es = 'Sin metricas para hoy.'; en = 'No metrics for today.' }
     ayuda_titulo      = @{ es = 'Como funciona'; en = 'How it works' }
@@ -202,7 +209,13 @@ function T([string]$clave) {
 }
 
 function TF([string]$clave, [object[]]$valores) {
-    return ((T $clave) -f $valores)
+    # Reemplazo propio en vez de -f: un texto con llaves (p.ej. la ayuda) no rompe.
+    $texto = T $clave
+    $lista = @($valores)
+    for ($i = 0; $i -lt $lista.Count; $i++) {
+        $texto = $texto.Replace('{' + $i + '}', [string]$lista[$i])
+    }
+    return $texto
 }
 
 # Reetiqueta el chrome fijo (el texto que no se reconstruye en cada refresco). El menu y las
@@ -286,7 +299,8 @@ function Format-FechaResetLocal($local) {
     if ($local.Date -eq (Get-Date).Date) {
         return (TF 'reset_hoy' @($local.ToString('HH:mm')))
     }
-    return (TF 'reset_dia' @($local.ToString('dd/MM'), $local.ToString('HH:mm')))
+    $formato = if ($script:idioma -eq 'en') { 'MM/dd' } else { 'dd/MM' }
+    return (TF 'reset_dia' @($local.ToString($formato), $local.ToString('HH:mm')))
 }
 
 function Format-Reset($resetsAt) {
@@ -397,7 +411,14 @@ function Guardar-Config {
     # Merge sobre lo que ya haya en el archivo: las claves desconocidas del usuario se conservan.
     try {
         $obj = @{
-            statusPaths            = @($config.statusPaths)
+            statusPaths            = @($config.statusPaths | ForEach-Object {
+                # Si la ruta cae dentro del repo se guarda relativa, asi la misma config
+                # funciona en Windows y en Linux sin editar nada.
+                $full = [System.IO.Path]::GetFullPath([string]$_)
+                if ($full.StartsWith($scriptDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $full.Substring($scriptDir.Length).TrimStart('\', '/')
+                } else { $full }
+            })
             opencodeCliPath        = $config.opencodeCliPath
             opencodeRefreshSeconds = $config.opencodeRefreshSeconds
             codexRefreshSeconds    = $config.codexRefreshSeconds
@@ -802,7 +823,8 @@ function Refrescar-Tareas {
     }
 
     $activas = @($tareas | Where-Object { $_.status -ne 'done' -and $_.status -ne 'error' }).Count
-    $panelTareas.Children.Add((New-EncabezadoSeccion (T 'sec_tasks') (TF 'activas' @($activas)) $null 12)) | Out-Null
+    $textoActivas = if ($activas -eq 1) { T 'activa1' } else { TF 'activas' @($activas) }
+    $panelTareas.Children.Add((New-EncabezadoSeccion (T 'sec_tasks') $textoActivas $null 12)) | Out-Null
 
     if ($tareas.Count -eq 0) {
         $panelTareas.Children.Add((New-Texto (T 'sin_tareas') 11 $colorTextoSecundario $true '0,4,0,0')) | Out-Null
@@ -946,9 +968,9 @@ function Get-UsoClaudeGeneral {
 
         $resultado = [PSCustomObject]@{
             CincoHorasPorcentaje = [int]$util.five_hour.utilization
-            CincoHorasReset      = Format-Reset $util.five_hour.resets_at
+            CincoHorasReset      = $util.five_hour.resets_at
             SieteDiasPorcentaje  = [int]$util.seven_day.utilization
-            SieteDiasReset       = Format-Reset $util.seven_day.resets_at
+            SieteDiasReset       = $util.seven_day.resets_at
             EdadDatoSegundos     = $edadDatoSegundos
         }
         $script:ultimoUsoConocido = $resultado
@@ -1044,8 +1066,8 @@ function Refrescar-UsoClaude {
 
     $panelClaude.Children.Add((New-Texto (T 'claude_nota') 9 $colorTextoSecundario $true '0,4,0,2')) | Out-Null
 
-    $panelClaude.Children.Add((New-FilaBarra (T 'sesion_5h') $uso.CincoHorasPorcentaje $uso.CincoHorasReset (Get-ColorPorPorcentaje $uso.CincoHorasPorcentaje))) | Out-Null
-    $panelClaude.Children.Add((New-FilaBarra (T 'semanal_7d') $uso.SieteDiasPorcentaje $uso.SieteDiasReset (Get-ColorPorPorcentaje $uso.SieteDiasPorcentaje))) | Out-Null
+    $panelClaude.Children.Add((New-FilaBarra (T 'sesion_5h') $uso.CincoHorasPorcentaje (Format-Reset $uso.CincoHorasReset) (Get-ColorPorPorcentaje $uso.CincoHorasPorcentaje))) | Out-Null
+    $panelClaude.Children.Add((New-FilaBarra (T 'semanal_7d') $uso.SieteDiasPorcentaje (Format-Reset $uso.SieteDiasReset) (Get-ColorPorPorcentaje $uso.SieteDiasPorcentaje))) | Out-Null
 }
 
 # ================= Uso de Codex =================
@@ -1091,8 +1113,8 @@ function Get-UsoCodex {
             if ($rl) {
                 if ($null -ne $rl.primary.used_percent) { $rate5 = [int][math]::Round([double]$rl.primary.used_percent) }
                 if ($null -ne $rl.secondary.used_percent) { $rate7 = [int][math]::Round([double]$rl.secondary.used_percent) }
-                if ($null -ne $rl.primary.resets_at) { $reset5 = Format-ResetUnix $rl.primary.resets_at }
-                if ($null -ne $rl.secondary.resets_at) { $reset7 = Format-ResetUnix $rl.secondary.resets_at }
+                if ($null -ne $rl.primary.resets_at) { $reset5 = $rl.primary.resets_at }
+                if ($null -ne $rl.secondary.resets_at) { $reset7 = $rl.secondary.resets_at }
             }
         } catch { }
     }
@@ -1137,10 +1159,10 @@ function Refrescar-UsoCodex {
     }
 
     if ($null -ne $uso.Rate5) {
-        $panelCodex.Children.Add((New-FilaBarra (T 'sesion_5h') $uso.Rate5 $uso.Reset5 (Get-ColorPorPorcentaje $uso.Rate5))) | Out-Null
+        $panelCodex.Children.Add((New-FilaBarra (T 'sesion_5h') $uso.Rate5 (Format-ResetUnix $uso.Reset5) (Get-ColorPorPorcentaje $uso.Rate5))) | Out-Null
     }
     if ($null -ne $uso.Rate7) {
-        $panelCodex.Children.Add((New-FilaBarra (T 'semanal_7d') $uso.Rate7 $uso.Reset7 (Get-ColorPorPorcentaje $uso.Rate7))) | Out-Null
+        $panelCodex.Children.Add((New-FilaBarra (T 'semanal_7d') $uso.Rate7 (Format-ResetUnix $uso.Reset7) (Get-ColorPorPorcentaje $uso.Rate7))) | Out-Null
     }
 
     $sesionTxt = if ($uso.Sesiones -eq 1) { T 'n_sesion1' } else { TF 'n_sesiones' @($uso.Sesiones) }
@@ -1300,7 +1322,10 @@ function Refrescar-ProvidersCustom {
         }
         $detalle = @()
         if ($uso.Sesiones -or $uso.Prompts -or $uso.Pasos) {
-            $detalle += TF 'prov_detalle' @($uso.Sesiones, $uso.Prompts, $uso.Pasos)
+            $sesionTxt = if ($uso.Sesiones -eq 1) { T 'n_sesion1' } else { TF 'n_sesiones' @($uso.Sesiones) }
+            $promptTxt = if ($uso.Prompts -eq 1) { T 'n_prompt1' } else { TF 'n_prompts' @($uso.Prompts) }
+            $pasoTxt = if ($uso.Pasos -eq 1) { T 'n_paso1' } else { TF 'n_pasos' @($uso.Pasos) }
+            $detalle += "$sesionTxt - $promptTxt - $pasoTxt"
         }
         if ($uso.TokenIn -or $uso.TokenOut -or $uso.TokenCache) {
             $detalle += "Tokens: $(Format-Numero $uso.TokenIn) in - $(Format-Numero $uso.TokenOut) out - $(Format-Numero $uso.TokenCache) cache"

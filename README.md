@@ -115,8 +115,8 @@ La interfaz está en **español e inglés**. Se elige con `language` en `config.
   cualquier otro caso.
 - `"es"` / `"en"`: fija el idioma.
 
-El switch **English** del menú lo cambia en caliente y lo guarda. En la versión Linux también se
-puede forzar con `--lang en` sin tocar el archivo.
+El switch **English** del menú lo cambia en caliente y lo guarda (`es`/`en`). Para volver a `auto`,
+editá `config.json`. En la versión Linux también se puede forzar con `--lang en` sin tocar el archivo.
 
 ## Configuración (`config.json`)
 
@@ -183,7 +183,8 @@ python3 ai-progress-gtk.py
   siempre arriba (en Wayland puro el compositor manda).
 - `--dump` imprime el modelo completo (datos + textos ya formateados) como JSON, sin abrir ventana:
   sirve para probar la lógica en un server o en CI.
-- `--screenshot salida.png` se autofotografía y cierra (documentación).
+- `--screenshot salida.png` se autofotografía y cierra (documentación; necesita X11: en Wayland no
+  se puede leer el contenido de la ventana).
 - `--lang es|en` y `--theme dark|light` fuerzan idioma y tema para esa ejecución.
 
 ## Notas

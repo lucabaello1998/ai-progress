@@ -20,9 +20,11 @@
 # Nota Wayland: si hay XWayland disponible se fuerza GDK_BACKEND=x11 para poder posicionar
 # la ventana arriba a la derecha y mantenerla arriba. En X11 puro no hace falta nada.
 import argparse
+import collections
 import datetime
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -40,6 +42,7 @@ TXT = {
     'sec_codex': {'es': 'Codex', 'en': 'Codex'},
     'sec_opencode': {'es': 'OpenCode', 'en': 'OpenCode'},
     'activas': {'es': '{0} activas', 'en': '{0} active'},
+    'activa1': {'es': '1 activa', 'en': '1 active'},
     'sin_tareas': {'es': 'Sin tareas en curso.', 'en': 'No tasks running.'},
     'listo': {'es': 'Listo', 'en': 'Done'},
     'error': {'es': 'Error', 'en': 'Error'},
@@ -83,7 +86,6 @@ TXT = {
     'uso_prov': {'es': 'Uso - {0} (hoy)', 'en': 'Usage - {0} (today)'},
     'prov_sin_datos': {'es': 'Sin datos: revisa command/file y args del proveedor en config.json.',
                        'en': 'No data: check the provider command/file and args in config.json.'},
-    'prov_detalle': {'es': '{0} sesiones - {1} prompts - {2} pasos', 'en': '{0} sessions - {1} prompts - {2} steps'},
     'costo': {'es': 'Costo: $ {0}', 'en': 'Cost: $ {0}'},
     'sin_metricas': {'es': 'Sin metricas para hoy.', 'en': 'No metrics for today.'},
     'ayuda_titulo': {'es': 'Como funciona', 'en': 'How it works'},
@@ -161,9 +163,9 @@ def cargar_config(ruta):
 
     rutas = datos.get('statusPaths')
     if isinstance(rutas, list) and rutas:
-        cfg['statusPaths'] = [
-            str(p) if os.path.isabs(str(p)) else os.path.join(DIR_SCRIPT, str(p)) for p in rutas
-        ]
+        # Se guardan tal como vinieron (relativas si son relativas): asi la misma config
+        # sirve en Windows y en Linux. La resolucion se hace al leer.
+        cfg['statusPaths'] = [str(p) for p in rutas]
     if datos.get('opencodeCliPath'):
         cfg['opencodeCliPath'] = str(datos['opencodeCliPath'])
     for clave in ('opencodeRefreshSeconds', 'codexRefreshSeconds'):
@@ -231,6 +233,37 @@ def leer_archivo(ruta):
         return f.read()
 
 
+def _traducir_ruta(ruta):
+    """Traduce rutas absolutas del otro sistema (C:\\... <-> /mnt/c/...) para que la misma
+    config.json sirva en Windows y en WSL."""
+    if not ruta:
+        return ruta
+    if os.name == 'nt':
+        coincidencia = re.match(r'^/mnt/([A-Za-z])/(.*)$', ruta)
+        if coincidencia:
+            return coincidencia.group(1).upper() + ':\\' + coincidencia.group(2).replace('/', '\\')
+    else:
+        coincidencia = re.match(r'^([A-Za-z]):[\\/](.*)$', ruta)
+        if coincidencia:
+            candidata = '/mnt/' + coincidencia.group(1).lower() + '/' + coincidencia.group(2).replace('\\', '/')
+            if os.path.exists(candidata):
+                return candidata
+    return ruta
+
+
+def resolver_ruta(ruta):
+    """Ruta lista para abrir: relativa al script si hace falta, traducida si viene del otro SO."""
+    ruta = str(ruta)
+    absoluta = os.path.isabs(ruta)
+    if os.name != 'nt' and re.match(r'^[A-Za-z]:[\\/]', ruta):
+        absoluta = True  # ruta de Windows vista desde Linux
+    if not absoluta:
+        return os.path.join(DIR_SCRIPT, ruta)
+    if os.path.exists(ruta):
+        return ruta
+    return _traducir_ruta(ruta)
+
+
 def convertir_numero(valor, defecto=0.0):
     if valor is None or isinstance(valor, bool):
         return defecto if valor is None else float(valor)
@@ -256,9 +289,9 @@ def format_duracion(minutos):
 def format_numero(n):
     n = convertir_numero(n)
     if n >= 1000000:
-        return '%.1fM' % round(n / 1000000, 1)
+        return ('%g' % round(n / 1000000, 1)) + 'M'
     if n >= 1000:
-        return '%.1fk' % round(n / 1000, 1)
+        return ('%g' % round(n / 1000, 1)) + 'k'
     return str(int(n))
 
 
@@ -282,7 +315,8 @@ def format_fecha_reset_local(fecha):
     ahora = datetime.datetime.now().astimezone()
     if fecha.date() == ahora.date():
         return TF('reset_hoy', fecha.strftime('%H:%M'))
-    return TF('reset_dia', fecha.strftime('%d/%m'), fecha.strftime('%H:%M'))
+    formato = '%m/%d' if IDIOMA == 'en' else '%d/%m'
+    return TF('reset_dia', fecha.strftime(formato), fecha.strftime('%H:%M'))
 
 
 def format_reset(valor):
@@ -389,6 +423,7 @@ def get_eta_minutos(esperados, completados, duraciones, en_vuelo):
 def leer_status(rutas):
     tareas = []
     for ruta in rutas:
+        ruta = resolver_ruta(ruta)
         if not os.path.isfile(ruta):
             continue
         try:
@@ -396,32 +431,43 @@ def leer_status(rutas):
         except Exception:
             continue
         if isinstance(datos, dict) and isinstance(datos.get('tasks'), list):
-            tareas.extend(datos['tasks'])
+            # Una entrada rara en tasks no debe romper el refresco (ni el timer de GTK).
+            tareas.extend(t for t in datos['tasks'] if isinstance(t, dict))
     return tareas
 
 
 # ---------- Claude ----------
+_ULTIMO_CLAUDE = {'uso': None}
+
+
 def get_uso_claude():
+    """Lee el cache de la CLI. Si el archivo esta a medio escribir o desaparece, devuelve el
+    ultimo dato bueno (igual que la version Windows)."""
     if not os.path.isfile(RUTA_CLAUDE):
-        return None
+        return _ULTIMO_CLAUDE['uso']
     try:
         cfg = json.loads(leer_archivo(RUTA_CLAUDE))
-        util = cfg.get('cachedUsageUtilization', {}).get('utilization')
+        cache_util = cfg.get('cachedUsageUtilization') or {}
+        util = cache_util.get('utilization') or {}
         if not util:
-            return None
+            return _ULTIMO_CLAUDE['uso']
+        cinco = util.get('five_hour') or {}
+        siete = util.get('seven_day') or {}
         edad = None
-        fetched = cfg.get('cachedUsageUtilization', {}).get('fetchedAtMs')
+        fetched = cache_util.get('fetchedAtMs')
         if fetched:
-            edad = (datetime.datetime.now().timestamp() * 1000 - float(fetched)) / 1000.0
-        return {
-            'cinco_pct': _entero(util.get('five_hour', {}).get('utilization'), 0),
-            'cinco_reset': format_reset(util.get('five_hour', {}).get('resets_at')),
-            'siete_pct': _entero(util.get('seven_day', {}).get('utilization'), 0),
-            'siete_reset': format_reset(util.get('seven_day', {}).get('resets_at')),
+            edad = (datetime.datetime.now().timestamp() * 1000 - convertir_numero(fetched)) / 1000.0
+        uso = {
+            'cinco_pct': int(round(convertir_numero(cinco.get('utilization')))),
+            'cinco_reset': cinco.get('resets_at'),
+            'siete_pct': int(round(convertir_numero(siete.get('utilization')))),
+            'siete_reset': siete.get('resets_at'),
             'edad_seg': edad,
         }
+        _ULTIMO_CLAUDE['uso'] = uso
+        return uso
     except Exception:
-        return None
+        return _ULTIMO_CLAUDE['uso']
 
 
 # ---------- Codex ----------
@@ -453,7 +499,8 @@ def get_uso_codex():
     for ruta in archivos:
         try:
             with open(ruta, 'r', encoding='utf-8-sig', errors='replace') as f:
-                tail = f.read().splitlines()[-600:]
+                # Solo las ultimas 600 lineas, sin cargar el archivo entero en memoria.
+                tail = list(collections.deque(f, maxlen=600))
             texto = None
             for linea in reversed(tail):
                 if '"token_count"' in linea:
@@ -481,9 +528,9 @@ def get_uso_codex():
             if secundario.get('used_percent') is not None:
                 rate7 = round(convertir_numero(secundario.get('used_percent')))
             if primario.get('resets_at') is not None:
-                reset5 = format_reset_unix(primario.get('resets_at'))
+                reset5 = primario.get('resets_at')
             if secundario.get('resets_at') is not None:
-                reset7 = format_reset_unix(secundario.get('resets_at'))
+                reset7 = secundario.get('resets_at')
         except Exception:
             continue
     return {
@@ -494,6 +541,9 @@ def get_uso_codex():
 
 
 # ---------- OpenCode ----------
+_ULTIMO_OPENCODE = {'uso': None}
+
+
 def resolver_cli_opencode(cfg):
     ruta = cfg.get('opencodeCliPath')
     if ruta and os.path.isfile(str(ruta)) and os.access(str(ruta), os.X_OK):
@@ -512,14 +562,14 @@ def resolver_cli_opencode(cfg):
 def get_uso_opencode(cfg):
     cli = resolver_cli_opencode(cfg)
     if not cli:
-        return None
+        return _ULTIMO_OPENCODE['uso']
     try:
         proceso = subprocess.run([cli, 'stats', '--days', '0', '--json'],
                                  capture_output=True, text=True, timeout=10)
         datos = json.loads(proceso.stdout)
         tokens = datos.get('tokens') or {}
         cache = tokens.get('cache') or {}
-        return {
+        uso = {
             'sesiones': _entero(datos.get('sessions'), 0),
             'prompts': _entero(datos.get('prompts'), 0),
             'pasos': _entero(datos.get('steps'), 0),
@@ -528,20 +578,22 @@ def get_uso_opencode(cfg):
             'cache': convertir_numero(cache.get('read')) + convertir_numero(cache.get('write')),
             'costo': convertir_numero(datos.get('cost')),
         }
+        _ULTIMO_OPENCODE['uso'] = uso
+        return uso
     except Exception:
-        return None
+        return _ULTIMO_OPENCODE['uso']
 
 
 # ---------- Proveedores custom ----------
 def get_uso_provider_custom(cfg, prov):
     try:
         if prov.get('file'):
-            ruta = str(prov['file'])
-            if not os.path.isabs(ruta):
-                ruta = os.path.join(DIR_SCRIPT, ruta)
-            datos = json.loads(leer_archivo(ruta))
+            datos = json.loads(leer_archivo(resolver_ruta(prov['file'])))
         else:
-            comando = [str(prov.get('command'))] + [str(a) for a in (prov.get('args') or [])]
+            args = prov.get('args') or []
+            if isinstance(args, str):
+                args = [args]
+            comando = [str(prov.get('command'))] + [str(a) for a in args]
             proceso = subprocess.run(comando, capture_output=True, text=True, timeout=10)
             datos = json.loads(proceso.stdout)
         tokens = datos.get('tokens') or {}
@@ -579,7 +631,8 @@ def construir_modelo(cfg, cache):
     # --- Tareas ---
     tareas = leer_status(cfg['statusPaths'])
     activas = len([t for t in tareas if t.get('status') not in ('done', 'error')])
-    bloques = [{'tipo': 'texto', 'texto': TF('activas', activas), 'clase': 'dim'}]
+    texto_activas = T('activa1') if activas == 1 else TF('activas', activas)
+    bloques = [{'tipo': 'texto', 'texto': texto_activas, 'clase': 'dim'}]
     if not tareas:
         bloques.append({'tipo': 'texto', 'texto': T('sin_tareas'), 'clase': 'dim', 'italica': True})
     for tarea in tareas:
@@ -641,7 +694,8 @@ def construir_modelo(cfg, cache):
     }
 
     # --- Claude ---
-    uso = get_uso_claude()
+    visible_claude = bool(cfg['sections'].get('claude', True))
+    uso = get_uso_claude() if visible_claude else None
     texto_edad = None
     color_edad = 'dim'
     if uso is None:
@@ -664,24 +718,30 @@ def construir_modelo(cfg, cache):
     else:
         bloques.append({'tipo': 'texto', 'texto': T('claude_nota'), 'clase': 'dim', 'italica': True, 'chico': True})
         bloques.append({'tipo': 'fila_barra', 'etiqueta': T('sesion_5h'), 'pct': uso['cinco_pct'],
-                        'reset': uso['cinco_reset'], 'color': color_por_porcentaje(uso['cinco_pct'])})
+                        'reset': format_reset(uso.get('cinco_reset')),
+                        'color': color_por_porcentaje(uso['cinco_pct'])})
         bloques.append({'tipo': 'fila_barra', 'etiqueta': T('semanal_7d'), 'pct': uso['siete_pct'],
-                        'reset': uso['siete_reset'], 'color': color_por_porcentaje(uso['siete_pct'])})
+                        'reset': format_reset(uso.get('siete_reset')),
+                        'color': color_por_porcentaje(uso['siete_pct'])})
     modelo['secciones']['claude'] = {
         'titulo': T('uso_claude'), 'visible': bool(cfg['sections'].get('claude', True)),
         'edad': texto_edad, 'color_edad': color_edad, 'bloques': bloques,
     }
 
     # --- Codex ---
+    visible_codex = bool(cfg['sections'].get('codex', True))
     ttl = _entero(cfg.get('codexRefreshSeconds'), 60)
-    guardado = cache.get('codex') or {}
-    if guardado.get('leido') is not None and ahora - guardado['leido'] < ttl:
-        uso = guardado.get('uso')
-        leido = guardado['leido']
+    if visible_codex:
+        guardado = cache.get('codex') or {}
+        if guardado.get('leido') is not None and ahora - guardado['leido'] < ttl:
+            uso = guardado.get('uso')
+            leido = guardado['leido']
+        else:
+            uso = get_uso_codex()
+            leido = ahora
+            cache['codex'] = {'leido': leido, 'uso': uso}
     else:
-        uso = get_uso_codex()
-        leido = ahora
-        cache['codex'] = {'leido': leido, 'uso': uso}
+        uso, leido = None, None
     texto_edad = T('sin_datos')
     if leido is not None:
         seg = ahora - leido
@@ -694,10 +754,12 @@ def construir_modelo(cfg, cache):
     else:
         if uso.get('rate5') is not None:
             bloques.append({'tipo': 'fila_barra', 'etiqueta': T('sesion_5h'), 'pct': uso['rate5'],
-                            'reset': uso.get('reset5'), 'color': color_por_porcentaje(uso['rate5'])})
+                            'reset': format_reset_unix(uso.get('reset5')),
+                            'color': color_por_porcentaje(uso['rate5'])})
         if uso.get('rate7') is not None:
             bloques.append({'tipo': 'fila_barra', 'etiqueta': T('semanal_7d'), 'pct': uso['rate7'],
-                            'reset': uso.get('reset7'), 'color': color_por_porcentaje(uso['rate7'])})
+                            'reset': format_reset_unix(uso.get('reset7')),
+                            'color': color_por_porcentaje(uso['rate7'])})
         sesion_txt = T('n_sesion1') if uso['sesiones'] == 1 else TF('n_sesiones', uso['sesiones'])
         linea = 'Tokens: %s in' % format_numero(uso['entrada'])
         if uso['cache'] > 0:
@@ -713,15 +775,19 @@ def construir_modelo(cfg, cache):
     }
 
     # --- OpenCode ---
+    visible_opencode = bool(cfg['sections'].get('opencode', True))
     ttl = _entero(cfg.get('opencodeRefreshSeconds'), 60)
-    guardado = cache.get('opencode') or {}
-    if guardado.get('leido') is not None and ahora - guardado['leido'] < ttl:
-        uso = guardado.get('uso')
-        leido = guardado['leido']
+    if visible_opencode:
+        guardado = cache.get('opencode') or {}
+        if guardado.get('leido') is not None and ahora - guardado['leido'] < ttl:
+            uso = guardado.get('uso')
+            leido = guardado['leido']
+        else:
+            uso = get_uso_opencode(cfg)
+            leido = ahora
+            cache['opencode'] = {'leido': leido, 'uso': uso}
     else:
-        uso = get_uso_opencode(cfg)
-        leido = ahora
-        cache['opencode'] = {'leido': leido, 'uso': uso}
+        uso, leido = None, None
     texto_edad = T('sin_datos')
     if leido is not None:
         seg = ahora - leido
@@ -747,15 +813,19 @@ def construir_modelo(cfg, cache):
     for prov in cfg['customProviders']:
         cid = 'custom:' + str(prov['id'])
         nombre = str(prov.get('name') or prov['id'])
+        visible = bool(cfg['sections'].get(cid, True))
         ttl = refresh_provider(prov)
-        guardado = cache.get(cid) or {}
-        if guardado.get('leido') is not None and ahora - guardado['leido'] < ttl:
-            uso = guardado.get('uso')
-            leido = guardado['leido']
+        if visible:
+            guardado = cache.get(cid) or {}
+            if guardado.get('leido') is not None and ahora - guardado['leido'] < ttl:
+                uso = guardado.get('uso')
+                leido = guardado['leido']
+            else:
+                uso = get_uso_provider_custom(cfg, prov)
+                leido = ahora
+                cache[cid] = {'leido': leido, 'uso': uso}
         else:
-            uso = get_uso_provider_custom(cfg, prov)
-            leido = ahora
-            cache[cid] = {'leido': leido, 'uso': uso}
+            uso, leido = None, None
         texto_edad = None
         if uso is not None:
             seg = ahora - leido
@@ -765,7 +835,10 @@ def construir_modelo(cfg, cache):
             bloques.append({'tipo': 'texto', 'texto': T('prov_sin_datos'), 'clase': 'dim', 'italica': True, 'chico': True})
         else:
             if uso['sesiones'] or uso['prompts'] or uso['pasos']:
-                bloques.append({'tipo': 'texto', 'texto': TF('prov_detalle', uso['sesiones'], uso['prompts'], uso['pasos']), 'clase': 'normal'})
+                sesion_txt = T('n_sesion1') if uso['sesiones'] == 1 else TF('n_sesiones', uso['sesiones'])
+                prompt_txt = T('n_prompt1') if uso['prompts'] == 1 else TF('n_prompts', uso['prompts'])
+                paso_txt = T('n_paso1') if uso['pasos'] == 1 else TF('n_pasos', uso['pasos'])
+                bloques.append({'tipo': 'texto', 'texto': '%s - %s - %s' % (sesion_txt, prompt_txt, paso_txt), 'clase': 'normal'})
             if uso['entrada'] or uso['salida'] or uso['cache']:
                 bloques.append({'tipo': 'texto', 'texto': 'Tokens: %s in - %s out - %s cache' % (
                     format_numero(uso['entrada']), format_numero(uso['salida']), format_numero(uso['cache'])), 'clase': 'dim'})
@@ -873,6 +946,10 @@ class Widget:
         self.cache = {}
         self.barras_indef = []
         self.proveedor_css = Gtk.CssProvider()
+        # Se registra una sola vez; cambiar de tema solo recarga el CSS.
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), self.proveedor_css,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
         self.ventana = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
         self.ventana.set_decorated(False)
@@ -918,9 +995,6 @@ class Widget:
     def aplicar_tema(self):
         css = CSS_LIGHT if self.cfg['theme'] == 'light' else CSS_DARK
         self.proveedor_css.load_from_data(css.encode('utf-8'))
-        self.Gtk.StyleContext.add_provider_for_screen(
-            self.Gdk.Screen.get_default(), self.proveedor_css,
-            self.Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
 
     def construir_header(self):
         Gtk = self.Gtk
@@ -939,7 +1013,6 @@ class Widget:
 
         boton_menu = Gtk.Button(label='\u2630')
         boton_menu.set_relief(Gtk.ReliefStyle.NONE)
-        boton_menu.set_tooltip_text('menu')
         boton_menu.connect('clicked', self.abrir_menu)
         self.boton_menu = boton_menu
         fila.pack_start(boton_menu, False, False, 4)
@@ -967,8 +1040,8 @@ class Widget:
         self.scroll.set_margin_end(14)
         self.scroll.set_margin_top(4)
         self.scroll.set_margin_bottom(10)
-        display = self.Gdk.Display.get_default()
-        alto = display.get_primary_monitor().get_workarea().height
+        monitor = self._monitor()
+        alto = monitor.get_workarea().height if monitor is not None else 800
         self.scroll.set_max_content_height(max(300, alto - 90))
         self.scroll.set_propagate_natural_height(True)
         self.panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -985,9 +1058,22 @@ class Widget:
         self.posicionar()
         return False
 
+    def _monitor(self):
+        # En Wayland puro puede no haber monitor "primario": se usa el primero.
+        display = self.Gdk.Display.get_default()
+        if display is None:
+            return None
+        monitor = display.get_primary_monitor()
+        if monitor is None and display.get_n_monitors():
+            monitor = display.get_monitor(0)
+        return monitor
+
     def posicionar(self):
         try:
-            area = self.Gdk.Display.get_default().get_primary_monitor().get_workarea()
+            monitor = self._monitor()
+            if monitor is None:
+                return False
+            area = monitor.get_workarea()
             ancho = self.ventana.get_size()[0]
             self.ventana.move(area.x + area.width - ancho - 20, area.y + 20)
         except Exception:
@@ -997,6 +1083,8 @@ class Widget:
     # --- menu popup ---
     def abrir_menu(self, boton):
         Gtk = self.Gtk
+        if getattr(self, 'popover', None) is not None:
+            self.popover.destroy()
         popover = Gtk.Popover()
         popover.set_relative_to(boton)
         popover.set_position(Gtk.PositionType.BOTTOM)
@@ -1174,6 +1262,15 @@ class Widget:
         self.panel.pack_start(caja, False, False, 0)
 
     def refrescar(self, *_):
+        # Un dato raro (status.json a medio escribir, seccion rota) no debe matar el timer:
+        # si el callback de GLib lanza, GTK lo desregistra y el widget queda congelado.
+        try:
+            self._refrescar()
+        except Exception as error:
+            print('refresco fallo: %s' % error, file=sys.stderr)
+        return True
+
+    def _refrescar(self):
         self.barras_indef = []
         self.limpiar_panel()
         modelo = construir_modelo(self.cfg, self.cache)
@@ -1187,7 +1284,6 @@ class Widget:
             self.render_seccion(modelo['ayuda'], separador=False)
         self.ventana.queue_resize()
         self.ventana.show_all()
-        return True
 
     def pulsar(self):
         for barra in list(self.barras_indef):
@@ -1199,13 +1295,21 @@ class Widget:
 
     def autocaptura(self):
         try:
-            gdkwin = self.ventana.get_window()
-            ancho, alto = self.ventana.get_size()
-            pixbuf = self.Gdk.pixbuf_get_from_window(gdkwin, 0, 0, ancho, alto)
-            if pixbuf is not None and self.captura:
-                carpeta = os.path.dirname(os.path.abspath(self.captura))
-                os.makedirs(carpeta, exist_ok=True)
-                pixbuf.savev(os.path.abspath(self.captura), 'png', [], [])
+            display = self.Gdk.Display.get_default()
+            nombre = type(display).__name__ if display is not None else ''
+            if 'Wayland' in nombre:
+                # Wayland no expone el contenido de la ventana: no hay captura propia posible.
+                print('--screenshot necesita X11: en Wayland no se puede leer la ventana.', file=sys.stderr)
+            else:
+                gdkwin = self.ventana.get_window()
+                ancho, alto = self.ventana.get_size()
+                pixbuf = self.Gdk.pixbuf_get_from_window(gdkwin, 0, 0, ancho, alto)
+                if pixbuf is not None and self.captura:
+                    carpeta = os.path.dirname(os.path.abspath(self.captura))
+                    os.makedirs(carpeta, exist_ok=True)
+                    pixbuf.savev(os.path.abspath(self.captura), 'png', [], [])
+                else:
+                    print('captura fallo: la ventana no devolvio pixbuf', file=sys.stderr)
         except Exception as error:
             print('captura fallo: %s' % error, file=sys.stderr)
         self.Gtk.main_quit()
