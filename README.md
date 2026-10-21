@@ -247,4 +247,4 @@ o con un clic. Se apagan con `"notifications": false` en `config.json`.
   edad del dato). Codex se recalcula cada 60 s desde los logs; si no hubo sesiones hoy, lo dice.
 - Viene del widget personal para Claude Code `claude-progress`, generalizado a IA en general
   (ver **Historia**).
-- Sin licencia publicada: todos los derechos reservados.
+- Licencia MIT. Ver [LICENSE](LICENSE).
