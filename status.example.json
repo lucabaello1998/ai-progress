@@ -28,6 +28,12 @@
       "id": "t4",
       "name": "Revisión mensual de objetivos",
       "status": "done"
+    },
+    {
+      "id": "t5",
+      "name": "Deploy a producción esperando una credencial",
+      "status": "blocked",
+      "detail": "falta la API key del proveedor"
     }
   ]
 }

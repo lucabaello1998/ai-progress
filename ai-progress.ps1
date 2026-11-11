@@ -180,6 +180,7 @@ $script:txt = @{
     activa1           = @{ es = '1 activa'; en = '1 active' }
     sin_tareas        = @{ es = 'Sin tareas en curso.'; en = 'No tasks running.' }
     listo             = @{ es = 'Listo'; en = 'Done' }
+    bloqueada         = @{ es = 'Bloqueada'; en = 'Blocked' }
     error             = @{ es = 'Error'; en = 'Error' }
     agentes           = @{ es = '{0}/{1} agentes'; en = '{0}/{1} agents' }
     terminando        = @{ es = 'terminando...'; en = 'finishing...' }
@@ -984,6 +985,12 @@ function Refrescar-Tareas {
             $barra.IsIndeterminate = $false
             $barra.Minimum = 0; $barra.Maximum = 1; $barra.Value = 1
             $barra.Foreground = New-Brush $colorOk
+        } elseif ($estado -eq 'blocked') {
+            # Cualquier estado que no sea done/error se dibujaba como "en curso":
+            # una tarea bloqueada hace semanas mostraba un cronometro en dias.
+            $barra.IsIndeterminate = $false
+            $barra.Minimum = 0; $barra.Maximum = 1; $barra.Value = 0
+            $barra.Foreground = New-Brush $colorWarning
         } elseif ($estado -eq 'error') {
             $barra.IsIndeterminate = $false
             $barra.Minimum = 0; $barra.Maximum = 1; $barra.Value = 1
@@ -1015,6 +1022,9 @@ function Refrescar-Tareas {
         if ($estado -eq 'done') {
             $detalle.Text = (T 'listo')
             $detalle.Foreground = New-Brush $colorOk
+        } elseif ($estado -eq 'blocked') {
+            $detalle.Text = (T 'bloqueada')
+            $detalle.Foreground = New-Brush $colorWarning
         } elseif ($estado -eq 'error') {
             $detalle.Text = (T 'error')
             $detalle.Foreground = New-Brush $colorDanger

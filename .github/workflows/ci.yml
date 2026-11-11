@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # El widget no tiene build ni tests. Lo que sí se puede verificar sin abrir
+    # una ventana es el modelo (`--dump`) en los dos idiomas, que cada texto
+    # tenga las dos traducciones, y que el script de Windows parsee.
+    name: Modelo e i18n
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Sin setup-python a propósito: PyGObject (`gi`) se instala por apt y solo
+      # lo ve el python3 del sistema, no el que instala la action.
+      - name: GTK3 + PyGObject
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-3.0
+
+      - name: Verificar
+        run: python3 tools/check.py

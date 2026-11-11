@@ -46,6 +46,7 @@ TXT = {
     'activa1': {'es': '1 activa', 'en': '1 active'},
     'sin_tareas': {'es': 'Sin tareas en curso.', 'en': 'No tasks running.'},
     'listo': {'es': 'Listo', 'en': 'Done'},
+    'bloqueada': {'es': 'Bloqueada', 'en': 'Blocked'},
     'error': {'es': 'Error', 'en': 'Error'},
     'agentes': {'es': '{0}/{1} agentes', 'en': '{0}/{1} agents'},
     'terminando': {'es': 'terminando...', 'en': 'finishing...'},
@@ -709,6 +710,12 @@ def construir_modelo(cfg, cache):
             barra = {'modo': 'frac', 'valor': 1.0, 'color': 'ok'}
             detalle = T('listo')
             clase_detalle = 'ok'
+        elif estado == 'blocked':
+            # Cualquier estado que no sea done/error se dibujaba como "en curso":
+            # una tarea bloqueada hace semanas mostraba un cronómetro en días.
+            barra = {'modo': 'frac', 'valor': 0.0, 'color': 'warn'}
+            detalle = T('bloqueada')
+            clase_detalle = 'warn'
         elif estado == 'error':
             barra = {'modo': 'frac', 'valor': 1.0, 'color': 'danger'}
             detalle = T('error')
@@ -934,6 +941,7 @@ progressbar { min-height: 6px; }
 progressbar trough { background-color: rgba(255, 255, 255, 0.25); border-radius: 3px; min-height: 6px; }
 progressbar progress { background-color: #F97316; border-radius: 3px; min-height: 6px; }
 .barra-ok progress { background-color: #22C55E; }
+.barra-warn progress { background-color: #F59E0B; }
 .barra-danger progress { background-color: #EF4444; }
 .barra-indef progress { background-color: #6B7280; }
 popover { background-color: #11151C; border: 1px solid #3A4250; border-radius: 8px; }
@@ -968,6 +976,7 @@ progressbar { min-height: 6px; }
 progressbar trough { background-color: rgba(0, 0, 0, 0.16); border-radius: 3px; min-height: 6px; }
 progressbar progress { background-color: #F97316; border-radius: 3px; min-height: 6px; }
 .barra-ok progress { background-color: #16A34A; }
+.barra-warn progress { background-color: #B45309; }
 .barra-danger progress { background-color: #DC2626; }
 .barra-indef progress { background-color: #9CA3AF; }
 popover { background-color: #FFFFFF; border: 1px solid #D1D5DB; border-radius: 8px; }

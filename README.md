@@ -103,8 +103,13 @@ progreso soportadas por tarea:
 | Porcentaje | `progress` (0 a 1) | Barra al porcentaje |
 | Sin datos de avance | (ninguno) | Barra indeterminada + tiempo transcurrido |
 
-Campos comunes: `id`, `name`, `startedAt` (ISO), `status` (`running` \| `done` \| `error`),
-`detail` (línea extra opcional).
+Campos comunes: `id`, `name`, `startedAt` (ISO), `status` (`running` \| `done` \| `blocked` \|
+`error`), `detail` (línea extra opcional).
+
+`blocked` es para una tarea que no avanza por algo externo (falta un paso manual, una credencial,
+un deploy): se muestra en ámbar, con el texto "Bloqueada" y **sin cronómetro**, porque el tiempo
+transcurrido de una tarea trabada no dice nada. Cualquier otro valor que no sea `done`/`error` se
+dibuja como una tarea en curso.
 
 Ejemplo completo en [`status.example.json`](status.example.json). Los agentes lo actualizan al
 lanzar tareas largas; por ejemplo:
@@ -230,10 +235,33 @@ o con un clic. Se apagan con `"notifications": false` en `config.json`.
 
 ## Desarrollo
 
+```bash
+python tools/check.py
+```
+
+Verifica sin abrir ventana: que `--dump` arme el modelo en español y en inglés, que los 63 textos
+tengan las dos traducciones, que las tareas de `status.json` se dibujen como corresponde (cerradas
+al 100%, abiertas no) y que `ai-progress.ps1` parsee. Corre en el CI
+(`.github/workflows/ci.yml`, Ubuntu con GTK3) en cada push y PR.
+
 - `tools/build-icon.py` genera `assets/ai-progress.ico` y `.png` (requiere Pillow).
 - `tools/build-exe.ps1` compila `ai-progress.exe` con el `csc` que ya trae Windows.
 - `tools/standalone/build-standalone.ps1` compila el `.exe` autocontenido (requiere el SDK de .NET
   8+ y NuGet la primera vez; salida en `dist/`, que no se versiona).
+
+## Distribuir una versión
+
+El widget no se publica en ninguna tienda: se comparte el repo. Una versión nueva es:
+
+1. Probar el script en Windows (`ai-progress.exe`) y en Linux (`python3 ai-progress-gtk.py`).
+2. `python tools/check.py` en verde.
+3. Si cambió el ícono o el lanzador: `python tools/build-icon.py` y `tools/build-exe.ps1`, y
+   commitear los binarios que sí se versionan (`ai-progress.exe`, `assets/`).
+4. Para el paquete sin dependencias: `tools/standalone/build-standalone.ps1` deja
+   `dist/ai-progress-portable.zip`; se adjunta a la release de GitHub.
+
+`dist/` y `config.json`/`status.json` están gitignored: los dos primeros se regeneran, los otros
+son datos de quien lo usa.
 
 ## Notas
 
