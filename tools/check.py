@@ -67,27 +67,21 @@ ok('trae las cuatro secciones',
 ayuda = modelo.get('ayuda') or {}
 ok('trae la ayuda', bool(ayuda.get('titulo')) and len(ayuda.get('bloques') or []) > 0)
 
-print('\n== tareas ==')
-tareas = []
-for bloque in (modelo.get('secciones') or {}).get('tareas', {}).get('bloques', []):
-    if bloque.get('tipo') == 'tarea':
-        tareas.append(bloque)
-ok('se modeló al menos una tarea', len(tareas) > 0)
+print('\n== status.json de la máquina ==')
+# Ojo: `status.json` es dato de quien lo usa y está gitignored, así que en CI no
+# existe. Acá solo se comprueba que el modelo no se rompa en ninguno de los dos
+# casos; las reglas de dibujo se prueban en el ejemplo, que sí está versionado.
+tareas = [b for b in (modelo.get('secciones') or {}).get('tareas', {}).get('bloques', [])
+          if b.get('tipo') == 'tarea']
+textos_tareas = [b.get('texto') for b in (modelo.get('secciones') or {}).get('tareas', {}).get('bloques', [])
+                 if b.get('tipo') == 'texto']
+print('  info  ', f'{len(tareas)} tarea(s) en esta máquina')
+
+avisa_vacio = any((t or '').lower().startswith('sin tareas') for t in textos_tareas)
+ok('avisa "sin tareas" solo cuando no hay tareas',
+   avisa_vacio == (len(tareas) == 0), str(textos_tareas))
 ok('cada tarea tiene nombre, barra y detalle',
     all(t.get('nombre') and isinstance(t.get('barra'), dict) and 'modo' in t['barra'] for t in tareas))
-
-# Las cerradas se dibujan llenas; las que no, nunca al 100%.
-cerradas = [t for t in tareas if t['detalle'] in ('Listo', 'Error')]
-abiertas = [t for t in tareas if t not in cerradas]
-ok('las tareas cerradas muestran la barra llena',
-    all(t['barra'].get('valor') == 1.0 for t in cerradas))
-ok('las abiertas no muestran 100%',
-    all(t['barra'].get('valor') is None or t['barra']['valor'] < 1.0 for t in abiertas))
-
-en_bloqueadas = [b for b in (modelos.get('en') or {}).get('secciones', {}).get('tareas', {}).get('bloques', [])
-                 if b.get('tipo') == 'tarea']
-ok('los dos idiomas dibujan la misma cantidad de tareas', len(en_bloqueadas) == len(tareas),
-    f'es={len(tareas)} en={len(en_bloqueadas)}')
 
 print('\n== status.example.json ==')
 # El ejemplo documentado tiene que poder dibujarse: es lo que copia cualquiera
@@ -110,9 +104,18 @@ detalles = [t.get('detalle') for t in tareas_ejemplo]
 ok('la tarea bloqueada del ejemplo se marca bloqueada', 'Bloqueada' in detalles, str(detalles))
 ok('la tarea terminada del ejemplo se marca lista', 'Listo' in detalles, str(detalles))
 
+cerradas = [t for t in tareas_ejemplo if t['detalle'] in ('Listo', 'Error')]
+abiertas = [t for t in tareas_ejemplo if t not in cerradas]
+ok('las tareas cerradas del ejemplo muestran la barra llena',
+    len(cerradas) > 0 and all(t['barra'].get('valor') == 1.0 for t in cerradas))
+ok('las abiertas del ejemplo no muestran 100%',
+    len(abiertas) > 0 and all(t['barra'].get('valor') is None or t['barra']['valor'] < 1.0 for t in abiertas))
+
 detalles_en = [b.get('detalle') for b in (ejemplo_en or {}).get('secciones', {}).get('tareas', {}).get('bloques', [])
                if b.get('tipo') == 'tarea']
 ok('y en inglés dice Blocked / Done', 'Blocked' in detalles_en and 'Done' in detalles_en, str(detalles_en))
+ok('los dos idiomas dibujan la misma cantidad de tareas', len(detalles_en) == len(detalles),
+    f'es={len(detalles)} en={len(detalles_en)}')
 
 print('\n== textos ==')
 sys.path.insert(0, RAIZ)
